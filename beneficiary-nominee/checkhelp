@@ -1,0 +1,607 @@
+MASTER DEVELOPMENT PROMPT
+Beneficiary Nomination System – Workday-Inspired Enterprise Application
+1. PROJECT OBJECTIVE
+Build a complete, modern, responsive Beneficiary Nomination System using the existing SharePoint data structure and Power Automate workflows.
+The application is intended for a financial services organisation and must provide an enterprise-grade user experience inspired by Workday.
+CRITICAL REQUIREMENT: USE THE EXISTING ENTITIES.
+Do not introduce alternative database entities, rename existing SharePoint lists, or create a new database architecture.
+The application must work with the following four actual SharePoint entities:
+schemes
+principalOfficers
+Nomination Members
+Nomination Nominees
+These are the source entities for the application.
+Before implementing anything:
+Inspect the existing project.
+Inspect the SharePoint data source connections.
+Inspect the actual columns and data types of all four entities.
+Inspect the existing Power Automate integrations.
+Identify lookup columns and relationships.
+Understand how reference numbers are generated.
+Identify the existing approval status values.
+Preserve all existing backend functionality.
+Never assume that a field exists simply because it appears in a UI requirement.
+2. ACTUAL DATA ENTITIES AND THEIR PURPOSE
+ENTITY 1: schemes
+Purpose: Maintain pension funds and schemes available for employee beneficiary nominations.
+Examples of existing schemes:
+Telekom Networks
+Magetsi Fund
+Madzi Fund
+Alimi Fund
+Responsibilities:
+Retrieve available schemes.
+Display scheme information.
+Allow administrators to create schemes.
+Allow administrators to edit schemes.
+Activate or deactivate schemes.
+Associate schemes with their assigned Principal Officers.
+Use the existing SharePoint columns and field types.
+Do not introduce a second scheme table or duplicate scheme information in another entity.
+ENTITY 2: principalOfficers
+Purpose: Maintain Principal Officer information and scheme assignments.
+Required information includes:
+Full Name.
+Email.
+Contact Number.
+Scheme Assignment.
+Status.
+Responsibilities:
+Retrieve Principal Officers.
+Display assigned schemes.
+Create Principal Officers.
+Edit Principal Officer information.
+Disable Principal Officers.
+Assign Principal Officers to schemes.
+The Principal Officer dashboard must retrieve the logged-in officer's assignments from the existing entity.
+Do not create a separate Principal Officer entity.
+ENTITY 3: Nomination Members
+Purpose: This is the main nomination header entity.
+It stores employee/member information and represents an individual beneficiary nomination submission.
+Information to display and capture includes:
+Member Number.
+Date of Birth.
+Branch Code.
+Cost Centre.
+Email Address.
+Fund Name.
+Reference Number.
+Submission Date.
+Approval Status.
+Uploaded Form Name.
+Uploaded Form URL.
+Important existing document fields:
+SourceFileName
+SourceFileUrl
+The above are known functional fields. Inspect the actual SharePoint schema to establish the complete field names and internal column names before implementation.
+Responsibilities:
+Create nomination submissions.
+Retrieve existing submissions.
+Display submission details.
+Search nominations.
+Display uploaded document information.
+Track approval status.
+Retrieve records using Reference Number.
+Display approval history where available through the existing backend.
+Reference Number is the primary identifier for a nomination throughout the application.
+Do not generate a second nomination identifier.
+ENTITY 4: Nomination Nominees
+Purpose: Store beneficiary details linked to employee nomination submissions.
+The actual CSV export confirms the following fields:
+Actual field	Purpose
+Title	Beneficiary full name
+Member	Existing member-related field
+MemberNumber	Employee/member number
+RowNumber	Existing row number
+DateOfBirth	Beneficiary date of birth
+Relationship	Relationship to member
+IdentityNumber	National ID or identity number
+BenefitCurrentPct	Existing benefit percentage
+BenefitRevisedPct	Revised benefit percentage
+FundName	Associated pension fund
+refNumber	Nomination reference number
+Use these actual field names when retrieving, displaying, and updating beneficiary information.
+Do not replace them with invented fields such as:
+BeneficiaryID.
+NominationID.
+AllocationPercentage.
+EmployeeReference.
+Where the UI requires a friendly label, map it to the actual field.
+Examples:
+Title → Beneficiary Full Name.
+DateOfBirth → Date of Birth.
+IdentityNumber → National ID / Identity Number.
+BenefitRevisedPct → Revised Benefit Percentage.
+refNumber → Reference Number.
+IMPORTANT: Preserve both BenefitCurrentPct and BenefitRevisedPct.
+Inspect the existing data and workflow to determine how these fields are used. Do not overwrite current percentages or assume that both fields have identical purposes.
+The refNumber field links beneficiaries to the corresponding record in Nomination Members.
+One nomination can have multiple beneficiaries.
+Relationship:
+Nomination Members.refNumber ↔ Nomination Nominees.refNumber
+Use the actual SharePoint column types and lookup behaviour when implementing this relationship.
+Treat reference numbers as identifiers, not mathematical values. Preserve their original representation when displaying or searching them.
+3. ENTITY RELATIONSHIP ARCHITECTURE
+Implement the application around the following existing relationships:
+SCHEMES
+Maintain available funds.
+Associate schemes with Principal Officers.
+PRINCIPAL OFFICERS
+Retrieve assigned schemes.
+Review nominations belonging to assigned schemes.
+NOMINATION MEMBERS
+Store the employee/member nomination header.
+Store the generated reference number.
+Store uploaded document information.
+Hold submission and approval information.
+NOMINATION NOMINEES
+Store individual beneficiaries.
+Link every beneficiary to the relevant nomination using refNumber.
+Relationship structure:
+SCHEMES
+|
+| Scheme Assignment
+|
+PRINCIPAL OFFICERS
+NOMINATION MEMBERS
+|
+| refNumber
+|
++----------------------+
+|                      |
+NOMINATION NOMINEES   DOCUMENTS
+|
+|
+MULTIPLE BENEFICIARIES
+The reference number must be used consistently across:
+Nomination records.
+Beneficiary records.
+Document retrieval.
+Submission details.
+Approval history.
+Search results.
+Do not introduce unnecessary relationships or duplicate records.
+4. USER ROLES AND ACCESS
+Implement four role-based experiences.
+EMPLOYEE
+Can:
+View available schemes.
+Register beneficiary nominations.
+Add multiple beneficiaries.
+Submit nomination information.
+View their own nominations.
+View beneficiary details.
+View uploaded documents.
+Track approval progress.
+View generated reference numbers.
+Employees must only access their own authorised records.
+PRINCIPAL OFFICER
+Can:
+View assigned nominations.
+Search by reference number.
+Search by member number.
+Search by employee name.
+View nomination details.
+View all linked beneficiaries.
+Retrieve supporting documents.
+Endorse nominations.
+Reject nominations.
+Provide comments.
+The Principal Officer must only review nominations associated with their assigned schemes, subject to backend permissions.
+PENSION MANAGER
+Can:
+View nominations endorsed by Principal Officers.
+Review beneficiary information.
+View supporting documents.
+Approve nominations.
+Reject nominations.
+Add comments.
+View approved and rejected records.
+ADMIN
+Can:
+Manage schemes.
+Manage Principal Officers.
+Manage users and their roles.
+Assign Principal Officers to schemes.
+View nomination records.
+Access system reports.
+View system-wide information.
+All role permissions must respect the existing authentication and backend authorisation configuration.
+5. WORKDAY-INSPIRED UI/UX DESIGN
+Create a modern enterprise application inspired by Workday's employee self-service and enterprise management experience.
+Do not copy Workday branding.
+Design a distinct corporate application with the following characteristics:
+Application shell
+Top navigation:
+Organisation logo.
+Beneficiary Nomination System.
+Global search.
+Notifications.
+User profile.
+Account menu.
+Left navigation:
+Role-specific menu.
+Collapsible sidebar.
+Professional icons.
+Active navigation indicators.
+Expandable menu groups.
+Main content:
+Breadcrumbs.
+Page title.
+Page description.
+Quick actions.
+Dashboard cards.
+Data tables.
+Forms.
+Detail panels.
+Design language
+Deep navy blue as the primary corporate colour.
+Teal as the secondary colour.
+White content surfaces.
+Light grey backgrounds.
+Professional typography.
+Subtle borders and shadows.
+Consistent spacing.
+Clean and readable tables.
+Professional status indicators.
+Avoid generic dashboard templates, excessive gradients, oversized cards and unnecessary decorative elements.
+The application should look like an established enterprise HR, pension and employee benefits management system.
+6. ROLE-BASED DASHBOARDS
+Employee Dashboard
+Display:
+Total Nominations.
+Pending Reviews.
+Approved Nominations.
+Rejected Nominations.
+Include:
+Register New Nomination.
+My Nomination Records.
+Available Schemes.
+Recent Activities.
+Approval Progress.
+Principal Officer Dashboard
+Display:
+Pending Endorsements.
+Endorsed Nominations.
+Rejected Nominations.
+Total Reviewed.
+Include:
+Pending Review Table.
+Recent Endorsements.
+Assigned Schemes.
+Search and Filtering.
+Pension Manager Dashboard
+Display:
+Awaiting Final Approval.
+Final Approved.
+Rejected Nominations.
+Total Processed.
+Include:
+Pending Final Approval.
+Recently Approved.
+Approval History.
+Search and Filtering.
+Admin Dashboard
+Display:
+Total Schemes.
+Total Principal Officers.
+Total Nominations.
+Pending Endorsements.
+Pending Pension Manager Reviews.
+Approved Nominations.
+Rejected Nominations.
+Include:
+Scheme Management.
+Principal Officer Management.
+User Management.
+Beneficiary Records.
+Reports.
+Recent System Activity.
+All statistics must be calculated using actual records retrieved from the existing entities and backend services.
+7. EMPLOYEE NOMINATION REGISTRATION
+Create a guided, multi-step nomination registration interface.
+Step 1: Member Information
+Capture:
+Member Number.
+Date of Birth.
+Branch Code.
+Cost Centre.
+Email Address.
+Fund Name.
+Retrieve schemes from schemes.
+Where existing employee information can be retrieved from the configured backend, populate the relevant fields automatically.
+Step 2: Beneficiary Information
+Allow employees to add multiple beneficiaries.
+Use the actual Nomination Nominees fields:
+Title
+DateOfBirth
+Relationship
+IdentityNumber
+BenefitCurrentPct
+BenefitRevisedPct
+MemberNumber
+FundName
+refNumber
+Display friendly labels in the UI while retaining actual field names in the API integration.
+Allow:
+Add Beneficiary.
+Edit Beneficiary.
+Remove Beneficiary.
+Validation:
+At least one beneficiary.
+Required information completed.
+Valid date of birth.
+Total applicable benefit allocation equals 100%.
+No negative percentages.
+Determine which percentage field should be submitted for the relevant operation by inspecting the existing SharePoint records and Power Automate process.
+Step 3: Supporting Documents
+Retrieve and display existing document fields from Nomination Members:
+SourceFileName
+SourceFileUrl
+Allow document upload through the existing backend integration.
+Provide:
+Upload.
+View.
+Download.
+File name.
+File preview where supported.
+Do not create a separate document storage system.
+Step 4: Review and Submit
+Display:
+Member Information.
+Selected Fund.
+Beneficiary Information.
+Benefit Percentages.
+Supporting Documents.
+Allow the employee to review the information before submission.
+Submit the nomination through the existing backend integration.
+The reference number must be generated by the existing backend workflow.
+Never generate a reference number independently in the frontend.
+After submission, display:
+Reference Number.
+Submission Date.
+Fund Name.
+Number of Beneficiaries.
+Submission Status.
+8. SUBMISSION MANAGEMENT
+Create a central nomination records interface.
+Use Nomination Members as the source of nomination header information.
+Retrieve related beneficiaries from Nomination Nominees using refNumber.
+Display:
+Reference Number.
+Member Number.
+Employee Name, where available from the existing data.
+Fund Name.
+Number of Beneficiaries.
+Submission Date.
+Approval Status.
+Actions.
+Search by:
+Reference Number.
+Member Number.
+Employee Name.
+Scheme Name.
+Include:
+Search.
+Status filters.
+Scheme filters.
+Date filters.
+Pagination.
+Sorting.
+Record details.
+Do not hardcode nomination records or scheme names into the production interface.
+9. NOMINATION DETAILS PAGE
+Create a detailed view using the existing entities.
+Header:
+Reference Number.
+Member Number.
+Fund Name.
+Submission Date.
+Current Status.
+Sections:
+Member Information
+Retrieve from Nomination Members.
+Beneficiary Details
+Retrieve from Nomination Nominees, filtered by the matching refNumber.
+Display:
+Beneficiary Name.
+Relationship.
+Date of Birth.
+Identity Number.
+Current Benefit Percentage.
+Revised Benefit Percentage.
+Documents
+Retrieve:
+SourceFileName
+SourceFileUrl
+Approval History
+Display existing approval history from the configured backend source.
+Show:
+Approval Stage.
+Approver.
+Decision.
+Date.
+Comments.
+Do not invent approval history fields. Inspect the existing workflow and data sources to determine how this information is retrieved.
+10. PRINCIPAL OFFICER ENDORSEMENT
+Create a dedicated review interface.
+Retrieve Principal Officer information from principalOfficers.
+Retrieve assigned schemes from the existing scheme assignment fields.
+Display only authorised pending nominations.
+The review screen must show:
+Member Information.
+Fund Name.
+Beneficiary Grid.
+Benefit Percentages.
+Supporting Documents.
+Approval History.
+Actions:
+Endorse.
+Reject.
+Add Comments.
+Rejection must require a reason.
+All actions must invoke the existing approval integration.
+Do not implement approval routing, status transitions or email notifications in the frontend.
+11. PENSION MANAGER APPROVAL
+Create a separate final review interface.
+Display nominations that have already been endorsed by Principal Officers.
+Provide:
+Submission Details.
+Beneficiary Information.
+Supporting Documents.
+Previous Endorsement.
+Approval History.
+Actions:
+Final Approve.
+Reject.
+Add Comments.
+Use existing backend integrations to process decisions.
+12. SCHEME MANAGEMENT
+Use the actual schemes entity.
+Create:
+Scheme List.
+Create Scheme.
+Edit Scheme.
+Activate Scheme.
+Deactivate Scheme.
+Assign Principal Officer.
+Use existing SharePoint columns.
+Do not create a replacement schemes entity.
+13. PRINCIPAL OFFICER MANAGEMENT
+Use the actual principalOfficers entity.
+Create:
+Principal Officer List.
+Create Principal Officer.
+Edit Principal Officer.
+Disable Principal Officer.
+Assign Scheme.
+Display:
+Full Name.
+Email.
+Contact Number.
+Assigned Scheme.
+Status.
+Use actual entity fields and existing backend operations.
+14. USER MANAGEMENT
+Implement role-based user administration.
+Supported roles:
+Employee.
+Principal Officer.
+Pension Manager.
+Admin.
+Allow administrators to:
+Create users.
+Update users.
+Assign roles.
+Disable accounts.
+Manage access.
+Inspect the existing authentication and user-management infrastructure before creating any additional entity.
+Do not assume that principalOfficers is the complete user account database.
+15. TECHNICAL IMPLEMENTATION
+The application must use the existing SharePoint and Power Automate infrastructure.
+Frontend responsibilities:
+Capture information.
+Retrieve records.
+Display data.
+Submit nominations.
+Retrieve beneficiaries.
+Upload and retrieve documents.
+Trigger approval actions.
+Display workflow status.
+Manage schemes.
+Manage Principal Officers.
+Manage users.
+Backend responsibilities already handled by existing infrastructure:
+Reference number generation.
+Approval routing.
+Approval status transitions.
+Email notifications.
+Document storage.
+Workflow processing.
+Create a centralised service layer for the four existing entities.
+Suggested service organisation:
+schemesService
+principalOfficersService
+nominationMembersService
+nominationNomineesService
+These are frontend service modules, not new database entities.
+Implement:
+Configurable API endpoints.
+Correct SharePoint field mappings.
+Loading states.
+Error handling.
+Empty states.
+Form validation.
+Authentication.
+Role-based access.
+Pagination.
+Document retrieval.
+Do not invent API endpoints, Power Automate payloads or SharePoint column names.
+Where integration details are missing, create clearly documented placeholders and request the actual endpoint contracts.
+16. RESPONSIVENESS AND ACCESSIBILITY
+Support:
+Desktop.
+Laptop.
+Tablet.
+Mobile.
+Use responsive layouts with:
+Collapsible navigation.
+Responsive dashboard cards.
+Mobile-friendly forms.
+Adaptable tables.
+Touch-friendly controls.
+Accessible labels.
+Keyboard navigation.
+Visible focus states.
+Breakpoints:
+Below 480px.
+480px–767px.
+768px–1199px.
+1200px and above.
+Prevent horizontal page overflow and overlapping components.
+17. IMPLEMENTATION RULES
+These rules are mandatory:
+Use the four existing SharePoint entities.
+Preserve actual field names.
+Preserve existing data types.
+Use refNumber as the primary linkage between nomination headers and beneficiaries.
+Do not create unnecessary beneficiary IDs.
+Do not create duplicate scheme or Principal Officer entities.
+Do not rebuild Power Automate workflows.
+Do not independently generate reference numbers.
+Do not invent approval statuses.
+Do not hardcode production records.
+Do not overwrite BenefitCurrentPct when updating BenefitRevisedPct.
+Do not invent document storage mechanisms.
+Do not assume missing fields exist.
+Preserve existing authentication and backend permissions.
+If the existing application already contains working functionality, improve and extend it without breaking that functionality.
+18. EXPECTED DELIVERABLE
+Deliver a fully functional, modern enterprise Beneficiary Nomination System built around the four actual entities:
+schemes
+principalOfficers
+Nomination Members
+Nomination Nominees
+The finished application must include:
+Workday-inspired UI/UX.
+Four role-based dashboards.
+Employee nomination registration.
+Multiple beneficiary management.
+Document upload and retrieval.
+Reference-number-based record retrieval.
+Nomination details.
+Principal Officer endorsement.
+Pension Manager final approval.
+Scheme management.
+Principal Officer management.
+User management.
+Global search.
+Notifications.
+Approval history.
+Reports.
+Responsive layouts.
+FINAL INSTRUCTION
+Do not start by creating a generic dashboard or inventing a new database.
+First understand the actual SharePoint entities, their columns, data types, lookup relationships and existing Power Automate integrations.
+Then build the frontend around the existing data architecture.
+The result should be a polished, professional enterprise application that is visually inspired by Workday, while accurately reflecting the organisation's existing Beneficiary Nomination System data model and business processes.

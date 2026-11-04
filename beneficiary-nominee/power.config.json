@@ -1,0 +1,15 @@
+{
+  "version": "1.0",
+  "appId": null,
+  "appDisplayName": "Beneficiary nominee platform",
+  "region": "prod",
+  "appType": "CodeApp",
+  "environmentId": "de100920-e570-ec0d-a95c-64551a2e6344",
+  "description": " ",
+  "buildPath": "./dist",
+  "buildEntryPoint": "index.html",
+  "localAppUrl": "http://localhost:3000",
+  "logoPath": "Default",
+  "connectionReferences": {},
+  "databaseReferences": {}
+}
