@@ -68,6 +68,7 @@ export interface Nomination {
   warnings: string
   sourceFileName: string
   sourceFileUrl: string
+  pdfDataUri: string
   nomineeCount: number
   totalCurrentPct: number
   totalRevisedPct: number

@@ -312,6 +312,7 @@ export function mapNomination(
     warnings: text(record.Warnings),
     sourceFileName: text(record.SourceFileName),
     sourceFileUrl: text(record.SourceFileUrl),
+    pdfDataUri: text(record.PdfDataUri),
     nomineeCount: numberValue(record.NomineeCount),
     totalCurrentPct: numberValue(record.TotalCurrentPct),
     totalRevisedPct: numberValue(record.TotalRevisedPct),

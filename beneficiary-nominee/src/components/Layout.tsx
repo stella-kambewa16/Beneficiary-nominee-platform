@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Icon } from './Icon'
-import { RoleMenu } from './RoleMenu'
 import { useAuth } from '../auth/auth-context'
 import { useData } from '../data/context'
 import {
@@ -20,18 +19,21 @@ function readCollapsed(): boolean {
   }
 }
 
-export function Layout({
-  route,
-  children,
-}: {
+export function Layout({ route, children }: {
   route: RouteState
   children: ReactNode
 }) {
   const { role, profile } = useAuth()
   const { loading, refreshing, error, refresh } = useData()
   const [collapsed, setCollapsed] = useState(readCollapsed)
-  const [mobileOpen, setMobileOpen] = useState(false)
+  const [now, setNow] = useState(() => new Date())
   const visibleNav = navItemsForRole(role)
+  const isDashboard = route.path === '/'
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   useEffect(() => {
     try {
@@ -40,6 +42,10 @@ export function Layout({
       /* Preference persistence is optional. */
     }
   }, [collapsed])
+
+  const hour = now.getHours()
+  const greeting =
+    hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening'
 
   const dataStatus = error ? (
     <div className="notice is-danger data-banner" role="alert">
@@ -71,16 +77,8 @@ export function Layout({
 
   return (
     <div className="app-shell">
-      <div
-        className={`sidebar-scrim${mobileOpen ? ' is-open' : ''}`}
-        onClick={() => setMobileOpen(false)}
-        aria-hidden="true"
-      />
-
       <aside
-        className={`sidebar${collapsed ? ' is-collapsed' : ''}${
-          mobileOpen ? ' is-open' : ''
-        }`}
+        className={`sidebar${collapsed ? ' is-collapsed' : ''}`}
         aria-label="Primary navigation"
       >
         <div className="brand">
@@ -133,7 +131,6 @@ export function Layout({
                       className={`nav-item${active ? ' is-active' : ''}`}
                       aria-current={active ? 'page' : undefined}
                       title={collapsed ? item.label : undefined}
-                      onClick={() => setMobileOpen(false)}
                     >
                       <Icon name={item.icon} size={18} className="nav-icon" />
                       <span className="nav-text">{item.label}</span>
@@ -166,26 +163,19 @@ export function Layout({
       </aside>
 
       <div className="main-column">
-        <header className="topbar">
-          <button
-            type="button"
-            className="icon-button menu-button"
-            onClick={() => setMobileOpen(true)}
-            aria-label="Open navigation menu"
-          >
-            <Icon name="menu" size={18} />
-          </button>
-
-          <div className="topbar-heading">
-            <span className="topbar-title">Hello, {profile.name}</span>
-          </div>
-
-          <div className="topbar-actions">
-            <RoleMenu />
-          </div>
-        </header>
-
         <main className="content">
+          {isDashboard ? (
+            <section className="welcome-container" aria-label="Welcome">
+              <div className="welcome-copy">
+                <h1 className="welcome-greeting">
+                  {greeting}, {profile.name}!
+                </h1>
+                <p className="welcome-description">
+                  Welcome back. Here&apos;s a summary of today&apos;s activities.
+                </p>
+              </div>
+            </section>
+          ) : null}
           {dataStatus}
           {children}
         </main>

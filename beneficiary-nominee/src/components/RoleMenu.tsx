@@ -59,9 +59,9 @@ export function RoleMenu() {
         <span className="avatar-sm" aria-hidden="true">
           {profile.initials}
         </span>
-        <span className="topbar-user-meta">
-          <span className="topbar-user-name">{profile.name}</span>
-          <span className="topbar-user-role">{profile.title}</span>
+        <span className="user-menu-profile-meta">
+          <span className="user-menu-profile-name">{profile.name}</span>
+          <span className="user-menu-profile-role">{profile.title}</span>
         </span>
         <Icon name="chevron-down" size={14} className="user-menu-chevron" />
       </button>

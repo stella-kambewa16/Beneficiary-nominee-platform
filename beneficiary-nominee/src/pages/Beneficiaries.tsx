@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { useData } from '../data/context'
 import { Icon } from '../components/Icon'
 import {
@@ -20,8 +20,6 @@ export function BeneficiariesPage() {
   const { beneficiaries, nominations, schemes, users } = useData()
   const { notify } = useToast()
   const { role, profile } = useAuth()
-  const searchRef = useRef<HTMLInputElement>(null)
-
   const [search, setSearch] = useState('')
   const [relationship, setRelationship] =
     useState<RelationshipFilter>('All')
@@ -99,16 +97,6 @@ export function BeneficiariesPage() {
     ? schemes.find((scheme) => scheme.id === selectedNomination.schemeId)
     : undefined
 
-  const focusSearch = () => {
-    searchRef.current?.focus()
-  }
-
-  const searchForBeneficiary = (name: string) => {
-    setSearch(name)
-    setRelationship('All')
-    focusSearch()
-  }
-
   const handleExport = () => {
     downloadCsv(
       'beneficiary-register.csv',
@@ -170,7 +158,6 @@ export function BeneficiariesPage() {
           <div className="search-field">
             <Icon name="search" size={15} className="search-icon" />
             <input
-              ref={searchRef}
               type="search"
               className="search-input"
               placeholder="Search beneficiary, member or reference"
@@ -270,18 +257,6 @@ export function BeneficiariesPage() {
                             }}
                           >
                             <Icon name="eye" size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            className="row-button"
-                            aria-label={`Search for ${beneficiary.title}`}
-                            title="Search beneficiary"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              searchForBeneficiary(beneficiary.title)
-                            }}
-                          >
-                            <Icon name="search" size={14} />
                           </button>
                         </div>
                       </td>

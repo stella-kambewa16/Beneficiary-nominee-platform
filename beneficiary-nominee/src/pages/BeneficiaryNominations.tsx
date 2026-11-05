@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useData } from '../data/context'
 import type { RouteState } from '../router'
 import { Icon } from '../components/Icon'
@@ -20,6 +21,27 @@ import { scopedBeneficiaries, scopedNominations } from '../lib/scope'
 import type { Nomination, NominationStatus } from '../data/types'
 
 type StatusFilter = 'All' | NominationStatus
+
+function getSourceFileUrl(value: string): string {
+  const sourceText =
+    new DOMParser().parseFromString(value, 'text/html').body.textContent?.trim() ??
+    ''
+  try {
+    const url = new URL(sourceText)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+      ? url.href
+      : ''
+  } catch {
+    return ''
+  }
+}
+
+function getPdfDataUri(value: string): string {
+  const dataUri = value.trim()
+  return /^data:application\/pdf(?:;[a-z0-9=+-]+)*,/i.test(dataUri)
+    ? dataUri
+    : ''
+}
 
 export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
   const {
@@ -50,6 +72,12 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
   const [rejectReason, setRejectReason] = useState('')
   const [rejectError, setRejectError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [pdfDocument, setPdfDocument] = useState<{
+    url: string
+    sourceUrl: string
+    title: string
+    canEmbed: boolean
+  } | null>(null)
 
   const visibleNominations = scopedNominations(
     role,
@@ -89,6 +117,10 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
 
   const selected =
     visibleNominations.find((item) => item.id === selectedId) ?? null
+  const selectedSourceFileUrl = selected
+    ? getSourceFileUrl(selected.sourceFileUrl)
+    : ''
+  const selectedPdfDataUri = selected ? getPdfDataUri(selected.pdfDataUri) : ''
   const selectedBeneficiaries = selected
     ? visibleBeneficiaries.filter(
         (item) =>
@@ -120,6 +152,28 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
     setRejectReason('')
     setRejectError('')
   }
+
+  const closePdfViewer = () => setPdfDocument(null)
+
+  useEffect(() => {
+    if (!pdfDocument) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        setPdfDocument(null)
+      }
+    }
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', handleKeyDown, true)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', handleKeyDown, true)
+    }
+  }, [pdfDocument])
 
   const handleApprove = async (
     nominationId: string,
@@ -182,21 +236,24 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
   }
 
   const viewForm = (nomination: Nomination) => {
-    if (nomination.sourceFileUrl) {
-      window.open(nomination.sourceFileUrl, '_blank', 'noopener,noreferrer')
+    const url = getSourceFileUrl(nomination.sourceFileUrl)
+    const pdfDataUri = getPdfDataUri(nomination.pdfDataUri)
+    if (!pdfDataUri && !url) {
+      notify(
+        'info',
+        'Supporting document unavailable',
+        `The SharePoint source file URL is missing or invalid for ${
+          nomination.referenceNumber || nomination.memberName
+        }.`,
+      )
       return
     }
-    notify(
-      'info',
-      'Nomination form',
-      nomination.sourceFileName
-        ? `${nomination.sourceFileName} is attached to ${
-            nomination.referenceNumber || nomination.memberName
-          }, but its source file URL is unavailable.`
-        : `The source file name is unavailable for ${
-            nomination.referenceNumber || nomination.memberName
-          }.`,
-    )
+    setPdfDocument({
+      url: pdfDataUri || url,
+      sourceUrl: url,
+      title: `Nomination ${nomination.referenceNumber || nomination.id}`,
+      canEmbed: Boolean(pdfDataUri),
+    })
   }
 
   const handleExport = () => {
@@ -368,10 +425,10 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                           <button
                             type="button"
                             className="row-button"
-                            aria-label={`View form for ${
+                            aria-label={`Review PDF for ${
                               nomination.referenceNumber || nomination.id
                             }`}
-                            title="View form"
+                            title="Review PDF"
                             onClick={(event) => {
                               event.stopPropagation()
                               viewForm(nomination)
@@ -676,26 +733,34 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
 
             <section className="drawer-section">
               <p className="drawer-section-title">Supporting document</p>
-              <div className="policy-summary">
-                <span className="policy-summary-icon">
-                  <Icon name="file-text" size={19} />
-                </span>
-                <div className="policy-summary-copy">
-                  <p className="policy-summary-title">
-                    {selected.sourceFileName || 'Source file name unavailable'}
-                  </p>
+              {selectedPdfDataUri || selectedSourceFileUrl ? (
+                <div className="supporting-document-actions">
                   <p className="policy-summary-meta">
-                    Source file name from the member submission
+                    Review the source PDF for this nomination.
                   </p>
+                  <button
+                    type="button"
+                    className="button button-primary"
+                    onClick={() =>
+                      setPdfDocument({
+                        url: selectedPdfDataUri || selectedSourceFileUrl,
+                        sourceUrl: selectedSourceFileUrl,
+                        title: `Nomination ${
+                          selected.referenceNumber || selected.id
+                        }`,
+                        canEmbed: Boolean(selectedPdfDataUri),
+                      })
+                    }
+                  >
+                    <Icon name="file-text" size={14} />
+                    Review PDF
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  className="button button-secondary button-small"
-                  onClick={() => viewForm(selected)}
-                >
-                  View form
-                </button>
-              </div>
+              ) : (
+                <p className="policy-summary-meta">
+                  SharePoint source file URL is missing or invalid.
+                </p>
+              )}
             </section>
 
             {rejecting ? (
@@ -767,6 +832,86 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
           </>
         ) : null}
       </Drawer>
+      {pdfDocument
+        ? createPortal(
+            <div
+              className="pdf-viewer-overlay"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) closePdfViewer()
+              }}
+            >
+              <section
+                className="pdf-viewer-dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-label={`PDF review: ${pdfDocument.title}`}
+              >
+                <header className="pdf-viewer-header">
+                  <div className="pdf-viewer-heading">
+                    <p className="drawer-eyebrow">Supporting document</p>
+                    <h2 className="pdf-viewer-title">{pdfDocument.title}</h2>
+                  </div>
+                  <button
+                    type="button"
+                    className="drawer-close"
+                    onClick={closePdfViewer}
+                    aria-label="Close PDF viewer"
+                    autoFocus
+                  >
+                    <Icon name="x" size={16} />
+                  </button>
+                </header>
+                {pdfDocument.canEmbed ? (
+                  <iframe
+                    className="pdf-viewer-frame"
+                    src={pdfDocument.url}
+                    title={`PDF review: ${pdfDocument.title}`}
+                  />
+                ) : (
+                  <div className="pdf-viewer-unavailable" role="status">
+                    <Icon name="alert-circle" size={22} />
+                    <p className="empty-title">
+                      This SharePoint file can’t be previewed in the app yet.
+                    </p>
+                    <p>
+                      SharePoint blocks embedding the file URL. An embedded PDF
+                      preview requires the nomination&apos;s PdfDataUri field to
+                      contain the PDF data.
+                    </p>
+                    <a
+                      className="button button-secondary"
+                      href={pdfDocument.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Open source in new tab
+                    </a>
+                  </div>
+                )}
+                <footer className="pdf-viewer-footer">
+                  {pdfDocument.sourceUrl ? (
+                    <a
+                      className="button button-secondary"
+                      href={pdfDocument.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Open source in new tab
+                    </a>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="button button-primary"
+                    onClick={closePdfViewer}
+                  >
+                    Done reviewing
+                  </button>
+                </footer>
+              </section>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   )
 }
