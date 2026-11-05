@@ -25,6 +25,14 @@ export const navItems: NavItem[] = [
     roles: allRoles,
   },
   {
+    path: '/tasks',
+    label: 'Tasks',
+    subtitle: 'Validate and correct nominations before endorsement.',
+    icon: 'file-check',
+    section: 'Workspace',
+    roles: adminOnly,
+  },
+  {
     path: '/nominations',
     label: 'Beneficiary Nominations',
     subtitle: 'Review, endorse and approve nominations from Nomination Members.',

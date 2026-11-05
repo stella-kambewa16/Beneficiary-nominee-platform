@@ -35,6 +35,35 @@ export function principalOfficerForScheme(
   return users.find((user) => user.schemeId === schemeId)
 }
 
+export function activePrincipalOfficerForScheme(
+  users: SystemUser[],
+  schemeId: string,
+): SystemUser | undefined {
+  return users.find(
+    (user) => user.schemeId === schemeId && user.status === 'Active',
+  )
+}
+
+export function isPendingStatus(status: NominationStatus): boolean {
+  return status === 'Pending PO' || status === 'Pending PA'
+}
+
+export function isTaskNomination(nomination: Nomination): boolean {
+  if (nomination.status === 'Submitted' || nomination.status === 'Tasks') {
+    return true
+  }
+  return (
+    isPendingStatus(nomination.status) && nomination.errorStatus !== 'Clear'
+  )
+}
+
+export function isEndorsementNomination(nomination: Nomination): boolean {
+  if (nomination.status === 'Approved' || nomination.status === 'Rejected') {
+    return true
+  }
+  return isPendingStatus(nomination.status) && nomination.errorStatus === 'Clear'
+}
+
 export function principalOfficerName(
   users: SystemUser[],
   schemeId: string,
@@ -53,18 +82,18 @@ export function canActOnNomination(
   role: Role,
   status: NominationStatus,
 ): boolean {
-  if (status === 'Pending PO Approval') {
+  if (status === 'Pending PO') {
     return role === 'Principal Officer' || role === 'Admin'
   }
-  if (status === 'Pending PM Approval') {
+  if (status === 'Pending PA') {
     return role === 'Pension Manager' || role === 'Admin'
   }
   return false
 }
 
 export function nextStageLabel(status: NominationStatus): string {
-  if (status === 'Pending PO Approval') return 'Pension Manager review'
-  if (status === 'Pending PM Approval') return 'Approved'
+  if (status === 'Pending PO') return 'Pending PA (Pension Administrator review)'
+  if (status === 'Pending PA') return 'Approved'
   return 'Closed'
 }
 

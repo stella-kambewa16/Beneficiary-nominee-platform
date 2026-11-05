@@ -9,6 +9,7 @@ import { findNavItem } from './navigation'
 import { navigate, useRoute } from './router'
 import type { RouteState } from './router'
 import { DashboardPage } from './pages/Dashboard'
+import { TasksPage } from './pages/Tasks'
 import { BeneficiaryNominationsPage } from './pages/BeneficiaryNominations'
 import { BeneficiariesPage } from './pages/Beneficiaries'
 import { ReportsPage } from './pages/Reports'
@@ -25,6 +26,8 @@ const legacyRoutes: Record<string, string> = {
 
 function CurrentPage({ route }: { route: RouteState }) {
   switch (route.path) {
+    case '/tasks':
+      return <TasksPage />
     case '/nominations':
       return <BeneficiaryNominationsPage route={route} />
     case '/beneficiaries':

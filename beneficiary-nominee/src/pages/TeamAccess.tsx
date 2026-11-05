@@ -259,9 +259,9 @@ export function TeamAccessPage() {
             <div className="notice">
               <Icon name="shield" size={14} className="notice-icon" />
               <span>
-                Admin, Principal Officer and Pension Manager can all create and
-                verify nominations. Only Admin can manage team access and role
-                assignments.
+                Admin validates and promotes nominations. Principal Officers
+                and the Pension Administrator endorse cleared nominations. Only
+                Admin can manage team access and role assignments.
               </span>
             </div>
           </div>

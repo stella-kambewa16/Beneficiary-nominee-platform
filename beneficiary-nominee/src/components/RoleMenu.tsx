@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Icon } from './Icon'
 import { useToast } from './toast-context'
 import { useAuth } from '../auth/auth-context'
-import { roleOrder, roleProfiles } from '../auth/roles'
+import { roleLabel, roleOrder, roleProfiles } from '../auth/roles'
 
 export function RoleMenu() {
   const { role, profile, setRole } = useAuth()
@@ -41,7 +41,7 @@ export function RoleMenu() {
     setRole(next)
     notify(
       'info',
-      `Viewing as ${next}`,
+      `Viewing as ${roleLabel(next)}`,
       roleProfiles[next].description,
     )
   }
@@ -94,7 +94,7 @@ export function RoleMenu() {
                   {optionProfile.initials}
                 </span>
                 <span className="role-option-copy">
-                  <span className="role-option-name">{option}</span>
+                  <span className="role-option-name">{roleLabel(option)}</span>
                   <span className="role-option-desc">
                     {optionProfile.description}
                   </span>

@@ -1,6 +1,7 @@
 import { Icon } from './Icon'
 import { navigate } from '../router'
 import { useAuth } from '../auth/auth-context'
+import { roleLabel } from '../auth/roles'
 
 export function AccessDenied() {
   const { role, profile } = useAuth()
@@ -17,7 +18,8 @@ export function AccessDenied() {
         </span>
         <h1 className="hero-title">Access restricted</h1>
         <p className="hero-text">
-          The {role} role does not include access to this area. You are signed
+          The {roleLabel(role)} role does not include access to this area. You
+          are signed
           in as {profile.name}. Switch to a role with the required permission,
           or return to your dashboard.
         </p>

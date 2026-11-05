@@ -1,5 +1,10 @@
 export type Role = 'Admin' | 'Principal Officer' | 'Pension Manager'
 
+/** Business label for a role. The internal Pension Manager key is retained for compatibility. */
+export function roleLabel(role: Role): string {
+  return role === 'Pension Manager' ? 'Pension Administrator' : role
+}
+
 export type Permission =
   | 'dashboard:view'
   | 'nominations:view'
@@ -68,7 +73,7 @@ export const roleProfiles: Record<Role, RoleProfile> = {
   'Pension Manager': {
     role: 'Pension Manager',
     name: 'Nyasha Banda',
-    title: 'Pension Manager',
+    title: 'Pension Administrator',
     email: 'nyasha.banda@oldmutual.co.mw',
     initials: 'NB',
     description:
@@ -82,6 +87,19 @@ export const roleProfiles: Record<Role, RoleProfile> = {
       'nominations:reject',
     ],
   },
+}
+
+/**
+ * The current build has no separate Pension Administrator list, so the demo
+ * Pension Manager profile is used as the default second endorser. Replace this
+ * helper with a real lookup when a PA source list is available.
+ */
+export function pensionAdministrator(): {
+  name: string
+  email: string
+} {
+  const profile = roleProfiles['Pension Manager']
+  return { name: profile.name, email: profile.email }
 }
 
 export interface PermissionMeta {
@@ -110,7 +128,7 @@ export const permissionCatalog: PermissionMeta[] = [
   },
   {
     key: 'nominations:approve:pm',
-    label: 'Give final approval as Pension Manager',
+    label: 'Give final approval as Pension Administrator',
     group: 'Approval workflow',
   },
   {

@@ -5,11 +5,24 @@ import type { IconName } from '../components/Icon'
 import { NominationStatusBadge } from '../components/Badges'
 import { useAuth } from '../auth/auth-context'
 import { formatDateTime } from '../lib/format'
-import { nominationSchemeName } from '../lib/nominations'
+import {
+  isTaskNomination,
+  nominationSchemeName,
+} from '../lib/nominations'
 import {
   scopedBeneficiaries,
   scopedNominations,
 } from '../lib/scope'
+
+function ageInDays(value: string): number {
+  if (!value) return 0
+  const created = new Date(`${value.slice(0, 10)}T00:00:00`)
+  if (Number.isNaN(created.getTime())) return 0
+  return Math.max(
+    0,
+    Math.floor((Date.now() - created.getTime()) / 86_400_000),
+  )
+}
 
 function activityMeta(action: string): {
   icon: IconName
@@ -75,11 +88,26 @@ export function DashboardPage() {
     users,
   )
 
+  const taskNominations = visibleNominations.filter(isTaskNomination)
+  const tasks = taskNominations.length
+  const oldestTaskDays = taskNominations.reduce(
+    (oldest, item) => Math.max(oldest, ageInDays(item.submissionDate)),
+    0,
+  )
   const pendingPO = visibleNominations.filter(
-    (item) => item.status === 'Pending PO Approval',
+    (item) => item.status === 'Pending PO',
   ).length
-  const pendingPM = visibleNominations.filter(
-    (item) => item.status === 'Pending PM Approval',
+  const pendingPA = visibleNominations.filter(
+    (item) => item.status === 'Pending PA',
+  ).length
+  const missingScheme = visibleNominations.filter(
+    (item) => item.errorStatus === 'Missing Scheme',
+  ).length
+  const missingOfficer = visibleNominations.filter(
+    (item) => item.errorStatus === 'Missing Principal Officer',
+  ).length
+  const missingInformation = visibleNominations.filter(
+    (item) => item.errorStatus === 'Missing Information',
   ).length
   const approved = visibleNominations.filter(
     (item) => item.status === 'Approved',
@@ -141,7 +169,26 @@ export function DashboardPage() {
           <p className="stat-label">Total nominations</p>
           <p className="stat-hint">
             <Icon name="clock" size={12} />
-            {pendingPO + pendingPM} awaiting a decision
+            {pendingPO + pendingPA} awaiting endorsement
+          </p>
+        </article>
+
+        <article className="stat-card">
+          <div className="stat-top">
+            <span className="stat-icon is-amber">
+              <Icon name="file-check" size={17} />
+            </span>
+            <span className="stat-context">Validation</span>
+          </div>
+          <p className="stat-value">{tasks}</p>
+          <p className="stat-label">Tasks queue</p>
+          <p className="stat-hint is-warn">
+            <Icon name="alert-circle" size={12} />
+            {missingScheme + missingOfficer + missingInformation} finding
+            {missingScheme + missingOfficer + missingInformation === 1
+              ? ''
+              : 's'}{' '}
+            to resolve
           </p>
         </article>
 
@@ -182,11 +229,11 @@ export function DashboardPage() {
             </span>
             <span className="stat-context">Stage 2</span>
           </div>
-          <p className="stat-value">{pendingPM}</p>
-          <p className="stat-label">Pending PM approval</p>
+          <p className="stat-value">{pendingPA}</p>
+          <p className="stat-label">Pending PA approval</p>
           <p className="stat-hint">
             <Icon name="shield" size={12} />
-            Pension Manager review
+            Pension Administrator review
           </p>
         </article>
 
@@ -272,6 +319,56 @@ export function DashboardPage() {
           <div className="mini-stat">
             <p className="mini-stat-value">{averageRevisedAllocation}%</p>
             <p className="mini-stat-label">Average revised allocation</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div className="panel-heading">
+            <h2 className="panel-title">Validation queue</h2>
+            <p className="panel-subtitle">
+              Nominations must reach Errors = Clear before endorsement.
+            </p>
+          </div>
+          <div className="panel-actions">
+            <button
+              type="button"
+              className="button button-secondary button-small"
+              onClick={() => navigate('/tasks')}
+            >
+              Open Tasks
+              <Icon name="arrow-right" size={13} />
+            </button>
+          </div>
+        </div>
+        <div className="mini-stat-grid">
+          <div className="mini-stat">
+            <p className="mini-stat-value">{tasks}</p>
+            <p className="mini-stat-label">In Tasks</p>
+          </div>
+          <div className="mini-stat">
+            <p className="mini-stat-value">{missingScheme}</p>
+            <p className="mini-stat-label">Missing Scheme</p>
+          </div>
+          <div className="mini-stat">
+            <p className="mini-stat-value">{missingOfficer}</p>
+            <p className="mini-stat-label">Missing Principal Officer</p>
+          </div>
+          <div className="mini-stat">
+            <p className="mini-stat-value">{missingInformation}</p>
+            <p className="mini-stat-label">Missing Information</p>
+          </div>
+          <div className="mini-stat">
+            <p className="mini-stat-value">{oldestTaskDays}d</p>
+            <p className="mini-stat-label">Oldest task</p>
+          </div>
+          <div className="mini-stat">
+            <p className="mini-stat-value">
+              {visibleNominations.filter((item) => item.errorStatus === 'Clear')
+                .length}
+            </p>
+            <p className="mini-stat-label">Errors Clear</p>
           </div>
         </div>
       </section>

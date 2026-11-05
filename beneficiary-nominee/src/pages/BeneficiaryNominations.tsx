@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useData } from '../data/context'
+import { navigate } from '../router'
 import type { RouteState } from '../router'
 import { Icon } from '../components/Icon'
 import {
   AllocationBar,
+  ErrorStatusBadge,
   NominationStatusBadge,
 } from '../components/Badges'
 import { Drawer } from '../components/Drawer'
@@ -12,8 +14,11 @@ import { useToast } from '../components/toast-context'
 import { useAuth } from '../auth/auth-context'
 import { downloadCsv } from '../lib/export'
 import { formatDate, initials } from '../lib/format'
+import { commentLines } from '../lib/comments'
 import {
   canActOnNomination,
+  isEndorsementNomination,
+  isTaskNomination,
   nextStageLabel,
   nominationSchemeName,
 } from '../lib/nominations'
@@ -93,8 +98,12 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
     users,
   )
 
+  const endorsementNominations = visibleNominations.filter(
+    isEndorsementNomination,
+  )
+
   const query = search.trim().toLowerCase()
-  const filtered = visibleNominations.filter((nomination) => {
+  const filtered = endorsementNominations.filter((nomination) => {
     const matchesSearch =
       !query ||
       [
@@ -130,9 +139,14 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
             String(item.memberItemId) === selected.id),
       )
     : []
+  const selectedComments = selected
+    ? commentLines(selected.comments).slice().reverse()
+    : []
   const canAct = selected
-    ? canActOnNomination(role, selected.status)
+    ? canActOnNomination(role, selected.status) &&
+      selected.errorStatus === 'Clear'
     : false
+  const selectedIsTask = selected ? isTaskNomination(selected) : false
   const lastRejection = selected
     ? [...selected.approvalHistory]
         .reverse()
@@ -179,6 +193,15 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
     nominationId: string,
     currentStatus: NominationStatus,
   ) => {
+    const target = visibleNominations.find((item) => item.id === nominationId)
+    if (target && target.errorStatus !== 'Clear') {
+      notify(
+        'error',
+        'Validation required',
+        `This nomination cannot be endorsed while Errors is "${target.errorStatus}". Clear the findings in Tasks first.`,
+      )
+      return
+    }
     setBusy(true)
     try {
       await approveNomination(
@@ -266,6 +289,10 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
         'Scheme',
         'Nominee Count',
         'Status',
+        'Errors',
+        'First Endorser',
+        'Second Endorser',
+        'Comments',
         'Submission Date',
       ],
       filtered.map((nomination) => [
@@ -275,6 +302,10 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
         nominationSchemeName(schemes, nomination),
         nomination.nomineeCount,
         nomination.status,
+        nomination.errorStatus,
+        nomination.endorsement1Name,
+        nomination.endorsement2Name,
+        nomination.comments,
         nomination.submissionDate,
       ]),
     )
@@ -340,14 +371,14 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
             aria-label="Filter by status"
           >
             <option value="All">All statuses</option>
-            <option value="Pending PO Approval">Pending PO Approval</option>
-            <option value="Pending PM Approval">Pending PM Approval</option>
+            <option value="Pending PO">Pending PO</option>
+            <option value="Pending PA">Pending PA</option>
             <option value="Approved">Approved</option>
             <option value="Rejected">Rejected</option>
           </select>
           <div className="toolbar-actions">
             <span className="result-count">
-              {filtered.length} of {visibleNominations.length} nominations
+              {filtered.length} of {endorsementNominations.length} nominations
             </span>
           </div>
         </div>
@@ -363,16 +394,21 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                   <th>Scheme</th>
                   <th>Nominee Count</th>
                   <th>Status</th>
+                  <th>Errors</th>
+                  <th>First Endorser</th>
+                  <th>Second Endorser</th>
+                  <th>Comments</th>
                   <th>Submission Date</th>
                   <th aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((nomination) => {
-                  const actionsAllowed = canActOnNomination(
-                    role,
-                    nomination.status,
-                  )
+                  const actionsAllowed =
+                    canActOnNomination(role, nomination.status) &&
+                    nomination.errorStatus === 'Clear'
+                  const latestComment =
+                    commentLines(nomination.comments).at(-1) ?? ''
                   return (
                     <tr
                       key={nomination.id}
@@ -404,6 +440,19 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                       <td>{nomination.nomineeCount}</td>
                       <td>
                         <NominationStatusBadge status={nomination.status} />
+                      </td>
+                      <td>
+                        <ErrorStatusBadge status={nomination.errorStatus} />
+                      </td>
+                      <td>{nomination.endorsement1Name || '—'}</td>
+                      <td>{nomination.endorsement2Name || '—'}</td>
+                      <td>
+                        <span
+                          className="cell-muted"
+                          title={nomination.comments}
+                        >
+                          {latestComment || '—'}
+                        </span>
                       </td>
                       <td>{formatDate(nomination.submissionDate)}</td>
                       <td>
@@ -628,7 +677,64 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                     {selected.sourceStatus || '—'}
                   </p>
                 </div>
+                <div className="detail-item">
+                  <p className="detail-label">Errors</p>
+                  <p className="detail-value">
+                    <ErrorStatusBadge status={selected.errorStatus} />
+                  </p>
+                </div>
+                <div className="detail-item">
+                  <p className="detail-label">First Endorser</p>
+                  <p className="detail-value">
+                    {selected.endorsement1Name || '—'}
+                    {selected.endorsement1Email ? (
+                      <span className="cell-muted">
+                        {' '}
+                        · {selected.endorsement1Email}
+                      </span>
+                    ) : null}
+                  </p>
+                </div>
+                <div className="detail-item">
+                  <p className="detail-label">Second Endorser</p>
+                  <p className="detail-value">
+                    {selected.endorsement2Name || '—'}
+                    {selected.endorsement2Email ? (
+                      <span className="cell-muted">
+                        {' '}
+                        · {selected.endorsement2Email}
+                      </span>
+                    ) : null}
+                  </p>
+                </div>
               </div>
+              {selected.errorFindings.length ? (
+                <div className="notice is-danger" style={{ marginTop: 14 }}>
+                  <Icon
+                    name="alert-circle"
+                    size={14}
+                    className="notice-icon"
+                  />
+                  <span>
+                    <strong>{selected.errorStatus}</strong>
+                    {selected.errorFindings.map((finding) => (
+                      <span key={finding} style={{ display: 'block' }}>
+                        • {finding}
+                      </span>
+                    ))}
+                  </span>
+                </div>
+              ) : (
+                <div className="notice is-success" style={{ marginTop: 14 }}>
+                  <Icon
+                    name="check-circle"
+                    size={14}
+                    className="notice-icon"
+                  />
+                  <span>Errors is Clear. This nomination is eligible for
+                    endorsement.</span>
+                </div>
+              )}
               {selected.warnings ? (
                 <div className="notice" style={{ marginTop: 14 }}>
                   <Icon
@@ -692,6 +798,29 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                   0,
                 )}
               />
+            </section>
+
+            <section className="drawer-section">
+              <p className="drawer-section-title">Comments</p>
+              {selectedComments.length ? (
+                <div className="workflow">
+                  {selectedComments.map((line, index) => (
+                    <div
+                      className="workflow-step"
+                      key={`${line}-${index}`}
+                    >
+                      <span className="workflow-marker">
+                        <Icon name="info" size={15} />
+                      </span>
+                      <div className="workflow-body">
+                        <p className="workflow-text">{line}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="help">No comments recorded yet.</p>
+              )}
             </section>
 
             <section className="drawer-section">
@@ -799,8 +928,8 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                   </button>
                 </div>
                 <p className="help">
-                  The reason is stored in the nomination’s Warnings field
-                  because SharePoint has no dedicated rejection column.
+                  The reason is appended to Comments and mirrored to the legacy
+                  Warnings field.
                 </p>
               </section>
             ) : null}
@@ -814,16 +943,32 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
               </div>
             ) : null}
 
-            {!canAct &&
-            selected.status !== 'Approved' &&
-            selected.status !== 'Rejected' ? (
+            {selectedIsTask ? (
+              <div className="notice is-info" style={{ marginTop: 18 }}>
+                <Icon name="info" size={14} className="notice-icon" />
+                <span>
+                  This nomination is still in Tasks with Errors ={' '}
+                  <strong>{selected.errorStatus}</strong>. Correct the findings
+                  before it can be endorsed.{' '}
+                  <button
+                    type="button"
+                    className="button button-secondary button-small"
+                    onClick={() => navigate('/tasks')}
+                  >
+                    Open Tasks
+                  </button>
+                </span>
+              </div>
+            ) : !canAct &&
+              selected.status !== 'Approved' &&
+              selected.status !== 'Rejected' ? (
               <div className="notice is-info" style={{ marginTop: 18 }}>
                 <Icon name="lock" size={14} className="notice-icon" />
                 <span>
                   This nomination is waiting for the{' '}
-                  {selected.status === 'Pending PO Approval'
-                    ? 'principal officer'
-                    : 'pension manager'}
+                  {selected.status === 'Pending PO'
+                    ? 'Principal Officer'
+                    : 'Pension Administrator'}
                   . Switch to a role with the matching approval permission to
                   action it.
                 </span>

@@ -2,7 +2,10 @@ import { createContext, useContext } from 'react'
 import type {
   ActivityItem,
   Beneficiary,
+  BeneficiaryCorrection,
   Nomination,
+  NominationCorrection,
+  NominationErrorStatus,
   Scheme,
   SchemeDraft,
   SystemUser,
@@ -33,6 +36,23 @@ export interface DataContextValue {
     actor: string,
     actorEmail: string,
     reason: string,
+  ) => Promise<void>
+  validateNomination: (
+    nominationId: string,
+    role: UserRole,
+    actor: string,
+  ) => Promise<{ status: NominationErrorStatus; findings: string[] }>
+  updateNominationDetails: (
+    nominationId: string,
+    correction: NominationCorrection,
+    actor: string,
+    role: UserRole,
+  ) => Promise<void>
+  updateBeneficiaryDetails: (
+    beneficiaryId: string,
+    correction: BeneficiaryCorrection,
+    actor: string,
+    role: UserRole,
   ) => Promise<void>
   createUser: (draft: UserDraft, actor: string) => Promise<void>
   updateUser: (id: string, draft: UserDraft, actor: string) => Promise<void>

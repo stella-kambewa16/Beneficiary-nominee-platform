@@ -249,6 +249,25 @@
   flex-shrink: 0;
 }
 
+.nav-count {
+  margin-left: auto;
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #b45309;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.nav-item .nav-chevron + .nav-count,
+.nav-count + .nav-chevron {
+  margin-left: 0;
+}
+
 .sidebar-footer {
   padding: 12px;
   border-top: 1px solid var(--mfs-border);
@@ -341,6 +360,7 @@
 .sidebar.is-collapsed .brand-toggle,
 .sidebar.is-collapsed .nav-label,
 .sidebar.is-collapsed .nav-text,
+.sidebar.is-collapsed .nav-count,
 .sidebar.is-collapsed .nav-chevron,
 .sidebar.is-collapsed .user-meta,
 .sidebar.is-collapsed .signout-label {

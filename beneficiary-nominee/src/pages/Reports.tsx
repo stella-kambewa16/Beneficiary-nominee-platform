@@ -5,8 +5,9 @@ import { useToast } from '../components/toast-context'
 import { useAuth } from '../auth/auth-context'
 import { downloadCsv, printReport } from '../lib/export'
 import { formatDate } from '../lib/format'
-import { schemeName } from '../lib/nominations'
+import { isTaskNomination, schemeName } from '../lib/nominations'
 import { scopedBeneficiaries, scopedNominations } from '../lib/scope'
+import { nominationErrorStatuses } from '../lib/validation'
 import type { IconName } from '../components/Icon'
 import type {
   ApprovalEvent,
@@ -16,6 +17,8 @@ import type {
 
 type ReportId =
   | 'nominations-by-scheme'
+  | 'validation-summary'
+  | 'validation-tasks'
   | 'pending-approvals'
   | 'approved-nominations'
   | 'beneficiary-register'
@@ -36,9 +39,24 @@ const reports: ReportDefinition[] = [
     icon: 'briefcase',
   },
   {
+    id: 'validation-summary',
+    title: 'Validation Summary',
+    description:
+      'Data-quality view of open tasks by Errors status and most common finding.',
+    icon: 'alert-circle',
+  },
+  {
+    id: 'validation-tasks',
+    title: 'Validation Tasks',
+    description:
+      'Nominations still in Tasks with their current Errors status and findings.',
+    icon: 'file-check',
+  },
+  {
     id: 'pending-approvals',
     title: 'Pending Approvals',
-    description: 'Nominations still waiting for a principal officer or manager.',
+    description:
+      'Clear nominations waiting for the Principal Officer or Pension Administrator.',
     icon: 'clock',
   },
   {
@@ -69,8 +87,10 @@ interface ReportTable {
 }
 
 const statuses: NominationStatus[] = [
-  'Pending PO Approval',
-  'Pending PM Approval',
+  'Submitted',
+  'Tasks',
+  'Pending PO',
+  'Pending PA',
   'Approved',
   'Rejected',
 ]
@@ -85,6 +105,21 @@ function finalApproval(nomination: Nomination): ApprovalEvent | undefined {
   return [...nomination.approvalHistory]
     .reverse()
     .find((event) => event.decision === 'Approved')
+}
+
+function ageInDays(value: string): number {
+  if (!value) return 0
+  const created = new Date(`${value.slice(0, 10)}T00:00:00`)
+  if (Number.isNaN(created.getTime())) return 0
+  return Math.max(
+    0,
+    Math.floor((Date.now() - created.getTime()) / 86_400_000),
+  )
+}
+
+function findingCategory(finding: string): string {
+  const separator = finding.indexOf(': ')
+  return separator >= 0 ? finding.slice(separator + 2) : finding
 }
 
 export function ReportsPage() {
@@ -163,14 +198,12 @@ export function ReportsPage() {
             return [
               scheme.name,
               items.length,
-              items.filter(
-                (item) => item.status === 'Pending PO Approval',
-              ).length,
-              items.filter(
-                (item) => item.status === 'Pending PM Approval',
-              ).length,
+              items.filter(isTaskNomination).length,
+              items.filter((item) => item.status === 'Pending PO').length,
+              items.filter((item) => item.status === 'Pending PA').length,
               items.filter((item) => item.status === 'Approved').length,
               items.filter((item) => item.status === 'Rejected').length,
+              items.filter((item) => item.errorStatus !== 'Clear').length,
               visibleBeneficiaries.filter((beneficiary) =>
                 references.has(beneficiary.refNumber),
               ).length,
@@ -180,11 +213,86 @@ export function ReportsPage() {
           headers: [
             'Scheme',
             'Nominations',
-            'Pending PO Approval',
-            'Pending PM Approval',
+            'Tasks',
+            'Pending PO',
+            'Pending PA',
             'Approved',
             'Rejected',
+            'Errors Open',
             'Beneficiaries',
+          ],
+          rows,
+        }
+      }
+
+      case 'validation-summary': {
+        const taskItems = filteredNominations.filter(isTaskNomination)
+        const rows = nominationErrorStatuses.map((errorStatus) => {
+          const items = taskItems.filter(
+            (nomination) => nomination.errorStatus === errorStatus,
+          )
+          const findingCounts = new Map<string, number>()
+          items.forEach((nomination) => {
+            nomination.errorFindings.forEach((finding) => {
+              const category = findingCategory(finding)
+              findingCounts.set(
+                category,
+                (findingCounts.get(category) ?? 0) + 1,
+              )
+            })
+          })
+          const topFinding = [...findingCounts.entries()].sort(
+            (a, b) => b[1] - a[1],
+          )[0]
+          const oldest = items.reduce(
+            (max, nomination) =>
+              Math.max(max, ageInDays(nomination.submissionDate)),
+            0,
+          )
+          return [
+            errorStatus,
+            items.length,
+            topFinding?.[0] ?? '—',
+            topFinding?.[1] ?? 0,
+            oldest,
+          ]
+        })
+        return {
+          headers: [
+            'Errors',
+            'Nominations',
+            'Most Common Finding',
+            'Count',
+            'Oldest (days)',
+          ],
+          rows,
+        }
+      }
+
+      case 'validation-tasks': {
+        const rows = filteredNominations
+          .filter(isTaskNomination)
+          .sort((a, b) => a.submissionDate.localeCompare(b.submissionDate))
+          .map((nomination) => [
+            nomination.referenceNumber,
+            nomination.memberNumber,
+            nomination.memberName,
+            schemeName(schemes, nomination.schemeId),
+            nomination.errorStatus,
+            nomination.errorFindings.join(' '),
+            formatDate(nomination.submissionDate),
+            nomination.endorsement1Name || '—',
+          ])
+        return {
+          headers: [
+            'Reference Number',
+            'Member Number',
+            'Member Name',
+            'Scheme',
+            'Errors',
+            'Validation Findings',
+            'Submission Date',
+            'First Endorser',
           ],
           rows,
         }
@@ -194,8 +302,9 @@ export function ReportsPage() {
         const rows = filteredNominations
           .filter(
             (nomination) =>
-              nomination.status === 'Pending PO Approval' ||
-              nomination.status === 'Pending PM Approval',
+              (nomination.status === 'Pending PO' ||
+                nomination.status === 'Pending PA') &&
+              nomination.errorStatus === 'Clear',
           )
           .sort((a, b) => a.submissionDate.localeCompare(b.submissionDate))
           .map((nomination) => [
@@ -204,6 +313,9 @@ export function ReportsPage() {
             nomination.memberName,
             schemeName(schemes, nomination.schemeId),
             nomination.status,
+            nomination.errorStatus,
+            nomination.endorsement1Name || '—',
+            nomination.endorsement2Name || '—',
             formatDate(nomination.submissionDate),
           ])
         return {
@@ -213,6 +325,9 @@ export function ReportsPage() {
             'Member Name',
             'Scheme',
             'Stage',
+            'Errors',
+            'First Endorser',
+            'Second Endorser',
             'Submission Date',
           ],
           rows,

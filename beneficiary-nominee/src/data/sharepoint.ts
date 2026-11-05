@@ -24,13 +24,19 @@ import type {
 } from '../generated/models/SchemesModel'
 import type {
   Beneficiary,
+  BeneficiaryCorrection,
   Nomination,
+  NominationCorrection,
+  NominationErrorStatus,
   NominationStatus,
   Scheme,
   SchemeStatus,
   SystemUser,
+  UserRole,
   UserStatus,
 } from './types'
+import { appendComment } from '../lib/comments'
+import { applyEvaluation } from '../lib/validation'
 
 /* -------------------------------------------------------------------------- */
 /* Field helpers                                                              */
@@ -54,77 +60,98 @@ function dateOnly(value: string | undefined): string {
   return raw.slice(0, 10)
 }
 
+/**
+ * The generated connector model predates the new list columns. These
+ * intersections keep the generated code untouched until it is regenerated;
+ * both fields are optional so older records still map cleanly.
+ */
+export type NominationRecord = NominationMembersRead & {
+  Errors?: string
+  Comments?: string
+}
+
+type NominationWriteRecord = Partial<Omit<NominationMembersWrite, 'ID'>> & {
+  Errors?: string
+  Comments?: string
+}
+
 /* -------------------------------------------------------------------------- */
 /* Status vocabulary                                                          */
 /* -------------------------------------------------------------------------- */
 
 const canonicalStatus: Record<NominationStatus, string> = {
-  'Pending PO Approval': 'Pending PO Approval',
-  'Pending PM Approval': 'Pending PM Approval',
+  Submitted: 'Submitted',
+  Tasks: 'Tasks',
+  'Pending PO': 'Pending PO',
+  'Pending PA': 'Pending PA',
   Approved: 'Approved',
   Rejected: 'Rejected',
 }
 
-let observedStatusTokens: Partial<Record<NominationStatus, string>> = {}
-
 /**
- * `endorseStatus` is free text in SharePoint, so the live vocabulary is
- * learned from the records that are actually returned. Writes reuse an
- * observed token when one is available and fall back to the canonical label
- * otherwise.
+ * Always write the canonical workflow labels. Legacy values are still read and
+ * normalised, but new transitions use the validation-first vocabulary.
  */
-export function resetStatusVocabulary(): void {
-  observedStatusTokens = {}
-}
-
-export function rememberStatusToken(raw: string | undefined): void {
-  const value = text(raw)
-  if (!value) return
-  const status = normalizeEndorsementStatus(value)
-  if (!observedStatusTokens[status]) {
-    observedStatusTokens[status] = value
-  }
-}
-
 export function statusWriteValue(status: NominationStatus): string {
-  return observedStatusTokens[status] ?? canonicalStatus[status]
+  return canonicalStatus[status]
 }
 
-const REJECTED = /(reject|declin|return|denied|not\s+(approved|endorsed))/i
+const REJECTED = /(reject|declin|denied|not\s+(approved|endorsed))/i
 const APPROVED = /(approved|approval|approve|complete|finalis|finaliz|accepted)/i
-const PENDING = /(pending|await|in\s*progress|submitted|new|open)/i
-const PM = /(\bpm\b|pension|manager|second|2nd|stage\s*2|final)/i
+const PENDING = /(pending|await|in\s*progress|open)/i
+const TASKS =
+  /(\btask\b|validation|validated|data\s*quality|missing|error|correct|hold)/i
+const SUBMITTED = /\b(submitted|new)\b/i
+const PA = /(\bpa\b|\bpm\b|pension|administrator|manager|second|2nd|stage\s*2|final)/i
 const PO = /(\bpo\b|principal|first|1st|stage\s*1)/i
 
 /**
- * Maps the free-text `endorseStatus` value onto the two-stage workflow.
- * Anything that cannot be recognised stays at the first stage so a record is
- * never silently treated as complete.
+ * Maps the free-text `endorseStatus` value onto the validation-first workflow.
+ * Unknown and blank values land in Tasks so a record is never silently treated
+ * as ready for endorsement.
  */
 export function normalizeEndorsementStatus(
   value: string | undefined,
 ): NominationStatus {
   const raw = text(value)
-  if (!raw) return 'Pending PO Approval'
+  if (!raw) return 'Tasks'
   if (REJECTED.test(raw)) return 'Rejected'
+  if (TASKS.test(raw) || SUBMITTED.test(raw)) return 'Tasks'
 
   if (PENDING.test(raw)) {
-    if (PM.test(raw) && !PO.test(raw)) return 'Pending PM Approval'
-    return 'Pending PO Approval'
+    if (PA.test(raw) && !PO.test(raw)) return 'Pending PA'
+    return 'Pending PO'
   }
 
   if (APPROVED.test(raw)) {
-    // "PO approved" still needs the pension manager; "PM approved" is final.
-    if (PM.test(raw) || !PO.test(raw)) return 'Approved'
-    return 'Pending PM Approval'
+    // "PO approved" still needs the Pension Administrator; "PA approved" is final.
+    if (PA.test(raw) || !PO.test(raw)) return 'Approved'
+    return 'Pending PA'
   }
 
   if (/endors/i.test(raw)) {
-    return PM.test(raw) ? 'Approved' : 'Pending PM Approval'
+    return PA.test(raw) ? 'Approved' : 'Pending PA'
   }
 
-  if (PM.test(raw)) return 'Pending PM Approval'
-  return 'Pending PO Approval'
+  if (PA.test(raw)) return 'Pending PA'
+  if (PO.test(raw)) return 'Pending PO'
+  return 'Tasks'
+}
+
+export function normalizeErrorStatus(
+  value: string | undefined,
+): NominationErrorStatus | null {
+  const raw = text(value).toLowerCase()
+  if (!raw) return null
+  if (raw.includes('scheme')) return 'Missing Scheme'
+  if (raw.includes('principal') || raw.includes('officer')) {
+    return 'Missing Principal Officer'
+  }
+  if (raw.includes('information') || raw.includes('missing')) {
+    return 'Missing Information'
+  }
+  if (raw.includes('clear')) return 'Clear'
+  return null
 }
 
 export function normalizeUserStatus(value: string | undefined): UserStatus {
@@ -204,7 +231,7 @@ export function mapUser(
 }
 
 function buildApprovalHistory(
-  record: NominationMembersRead,
+  record: NominationRecord,
   status: NominationStatus,
   submissionDate: string,
 ): Nomination['approvalHistory'] {
@@ -232,15 +259,19 @@ function buildApprovalHistory(
   if (status === 'Rejected') {
     const rejectedAtSecondStage =
       Boolean(secondEndorser) ||
-      /(\bpm\b|pension|manager|second|2nd)/i.test(text(record.endorseStatus))
+      /(\bpa\b|\bpm\b|pension|administrator|manager|second|2nd)/i.test(
+        text(record.endorseStatus),
+      )
     history.push({
       id: `${nominationId}-rejected`,
       stage: rejectedAtSecondStage
-        ? 'Pension Manager review'
+        ? 'Pension Administrator review'
         : 'Principal Officer review',
       actor:
         (rejectedAtSecondStage ? secondEndorser : firstEndorser) ||
-        (rejectedAtSecondStage ? 'Pension Manager' : 'Principal Officer'),
+        (rejectedAtSecondStage
+          ? 'Pension Administrator'
+          : 'Principal Officer'),
       decision: 'Rejected',
       date: decisionDate,
       comments: text(record.Warnings) || 'Rejected in SharePoint.',
@@ -248,11 +279,7 @@ function buildApprovalHistory(
     return history
   }
 
-  if (
-    firstEndorser ||
-    status === 'Pending PM Approval' ||
-    status === 'Approved'
-  ) {
+  if (firstEndorser || status === 'Pending PA' || status === 'Approved') {
     history.push({
       id: `${nominationId}-endorsed`,
       stage: 'Principal Officer review',
@@ -266,8 +293,8 @@ function buildApprovalHistory(
   if (secondEndorser || status === 'Approved') {
     history.push({
       id: `${nominationId}-approved`,
-      stage: 'Pension Manager review',
-      actor: secondEndorser || 'Pension Manager',
+      stage: 'Pension Administrator review',
+      actor: secondEndorser || 'Pension Administrator',
       decision: 'Approved',
       date: decisionDate,
       comments: '',
@@ -278,20 +305,21 @@ function buildApprovalHistory(
 }
 
 export function mapNomination(
-  record: NominationMembersRead,
+  record: NominationRecord,
   schemes: Scheme[],
+  users: SystemUser[],
+  beneficiaries: Beneficiary[],
 ): Nomination {
   const fundName = text(record.FundName)
   const scheme = findSchemeByLabel(schemes, fundName)
   const sourceStatus = text(record.endorseStatus)
   const status = normalizeEndorsementStatus(sourceStatus)
-  rememberStatusToken(sourceStatus)
 
   const created = text(record.Created)
   const modified = text(record.Modified)
   const submissionDate = dateOnly(created)
 
-  return {
+  const mapped: Nomination = {
     id: itemId(record.ID),
     referenceNumber: text(record.refNumber),
     memberNumber: text(record.MemberNumber),
@@ -309,6 +337,10 @@ export function mapNomination(
     submissionDate,
     status,
     sourceStatus,
+    errorStatus: 'Clear',
+    sourceErrors: text(record.Errors),
+    errorFindings: [],
+    comments: text(record.Comments),
     warnings: text(record.Warnings),
     sourceFileName: text(record.SourceFileName),
     sourceFileUrl: text(record.SourceFileUrl),
@@ -325,6 +357,8 @@ export function mapNomination(
     createdDate: dateOnly(created),
     modifiedDate: dateOnly(modified),
   }
+
+  return applyEvaluation(mapped, schemes, users, beneficiaries)
 }
 
 export function mapBeneficiary(record: NominationNomineesRead): Beneficiary {
@@ -406,7 +440,7 @@ async function getAllPages<T>(
 export interface SharePointSnapshot {
   schemeRecords: SchemesRead[]
   officerRecords: PrincipalOfficersRead[]
-  nominationRecords: NominationMembersRead[]
+  nominationRecords: NominationRecord[]
   nomineeRecords: NominationNomineesRead[]
 }
 
@@ -542,35 +576,49 @@ export async function setOfficerStatus(
 /* Nomination writes                                                          */
 /* -------------------------------------------------------------------------- */
 
-export type DecisionStage = 'PO' | 'PM'
+export type DecisionStage = 'PO' | 'PA'
 
 export interface NominationDecision {
   status: NominationStatus
   stage: DecisionStage
   actor: string
   actorEmail: string
+  actorRole: UserRole
   comment: string
+  previousComments: string
+  errors: NominationErrorStatus
+  secondEndorser?: { name: string; email: string }
 }
 
 export async function writeNominationDecision(
   id: string,
   decision: NominationDecision,
-): Promise<NominationMembersRead> {
-  const changed: Partial<Omit<NominationMembersWrite, 'ID'>> = {
+): Promise<NominationRecord> {
+  const changed: NominationWriteRecord = {
     endorseStatus: statusWriteValue(decision.status),
+    Errors: decision.errors,
+    Comments: appendComment(
+      decision.previousComments,
+      decision.actor,
+      decision.actorRole,
+      decision.comment,
+    ),
   }
 
   if (decision.stage === 'PO') {
     changed.OData__x0031_stEndorseName = decision.actor
     changed.OData__x0031_stEndorsementEmail = decision.actorEmail
+    if (decision.secondEndorser) {
+      changed.OData__x0032_ndEndorseName = decision.secondEndorser.name
+      changed.OData__x0032_ndEndorseEmail = decision.secondEndorser.email
+    }
   } else {
     changed.OData__x0032_ndEndorseName = decision.actor
     changed.OData__x0032_ndEndorseEmail = decision.actorEmail
   }
 
   if (decision.status === 'Rejected') {
-    // There is no dedicated rejection-reason column, so the reason is kept in
-    // the real `Warnings` field.
+    // Keep the legacy field in sync while Comments becomes the primary record.
     changed.Warnings = decision.comment
   }
 
@@ -582,10 +630,107 @@ export async function writeNominationDecision(
   return await getNominationRecord(id, updated)
 }
 
+export interface NominationValidationWrite {
+  status: NominationStatus
+  errors: NominationErrorStatus
+  comments: string
+  firstEndorser?: { name: string; email: string }
+  secondEndorser?: { name: string; email: string }
+}
+
+export async function writeNominationValidation(
+  id: string,
+  payload: NominationValidationWrite,
+): Promise<NominationRecord> {
+  const changed: NominationWriteRecord = {
+    endorseStatus: statusWriteValue(payload.status),
+    Errors: payload.errors,
+    Comments: payload.comments,
+  }
+
+  if (payload.firstEndorser) {
+    changed.OData__x0031_stEndorseName = payload.firstEndorser.name
+    changed.OData__x0031_stEndorsementEmail = payload.firstEndorser.email
+  }
+  if (payload.secondEndorser) {
+    changed.OData__x0032_ndEndorseName = payload.secondEndorser.name
+    changed.OData__x0032_ndEndorseEmail = payload.secondEndorser.email
+  }
+
+  const updated = unwrap(
+    await NominationMembersService.update(id, changed),
+    'SharePoint could not update the nomination validation.',
+  )
+
+  return await getNominationRecord(id, updated)
+}
+
+export async function updateNominationRecord(
+  id: string,
+  correction: NominationCorrection,
+  comments?: string,
+): Promise<NominationRecord> {
+  const changed: NominationWriteRecord = {}
+  if (correction.fundName !== undefined) changed.FundName = correction.fundName
+  if (correction.memberNumber !== undefined) {
+    changed.MemberNumber = correction.memberNumber
+  }
+  if (correction.memberName !== undefined) changed.Title = correction.memberName
+  if (correction.memberDob !== undefined) {
+    changed.DateOfBirth = correction.memberDob
+  }
+  if (correction.email !== undefined) changed.EmailAddress = correction.email
+  if (comments !== undefined) changed.Comments = comments
+
+  const updated = unwrap(
+    await NominationMembersService.update(id, changed),
+    'SharePoint could not update the nomination details.',
+  )
+
+  return await getNominationRecord(id, updated)
+}
+
+export async function updateNominationComments(
+  id: string,
+  comments: string,
+): Promise<NominationRecord> {
+  const changed: NominationWriteRecord = { Comments: comments }
+  const updated = unwrap(
+    await NominationMembersService.update(id, changed),
+    'SharePoint could not update the nomination comments.',
+  )
+  return await getNominationRecord(id, updated)
+}
+
+export async function updateNomineeRecord(
+  id: string,
+  correction: BeneficiaryCorrection,
+): Promise<NominationNomineesRead> {
+  const changed: Partial<Omit<NominationNomineesWrite, 'ID'>> = {}
+  if (correction.title !== undefined) changed.Title = correction.title
+  if (correction.relationship !== undefined) {
+    changed.Relationship = correction.relationship
+  }
+  if (correction.identityNumber !== undefined) {
+    changed.IdentityNumber = correction.identityNumber
+  }
+  if (correction.dateOfBirth !== undefined) {
+    changed.DateOfBirth = correction.dateOfBirth
+  }
+  if (correction.benefitRevisedPct !== undefined) {
+    changed.BenefitRevisedPct = correction.benefitRevisedPct
+  }
+
+  return unwrap(
+    await NominationNomineesService.update(id, changed),
+    'SharePoint could not update the beneficiary details.',
+  )
+}
+
 export async function getNominationRecord(
   id: string,
   fallback?: NominationMembersRead,
-): Promise<NominationMembersRead> {
+): Promise<NominationRecord> {
   if (fallback && fallback.ID !== undefined) return fallback
   return unwrap(
     await NominationMembersService.get(id),

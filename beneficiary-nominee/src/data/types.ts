@@ -1,8 +1,16 @@
 export type NominationStatus =
-  | 'Pending PO Approval'
-  | 'Pending PM Approval'
+  | 'Submitted'
+  | 'Tasks'
+  | 'Pending PO'
+  | 'Pending PA'
   | 'Approved'
   | 'Rejected'
+
+export type NominationErrorStatus =
+  | 'Missing Scheme'
+  | 'Missing Principal Officer'
+  | 'Missing Information'
+  | 'Clear'
 
 export type UserRole = 'Admin' | 'Principal Officer' | 'Pension Manager'
 
@@ -65,6 +73,14 @@ export interface Nomination {
   status: NominationStatus
   /** Raw value read from the SharePoint `endorseStatus` column. */
   sourceStatus: string
+  /** Validation gate computed from the nomination and its beneficiaries. */
+  errorStatus: NominationErrorStatus
+  /** Raw value read from the SharePoint `Errors` column, when present. */
+  sourceErrors: string
+  /** Human-readable validation findings behind `errorStatus`. */
+  errorFindings: string[]
+  /** Append-only validation and endorsement audit trail. */
+  comments: string
   warnings: string
   sourceFileName: string
   sourceFileUrl: string
@@ -115,6 +131,24 @@ export interface UserDraft {
   phone: string
   status: UserStatus
   schemeId: string | null
+}
+
+/** Fields operations can correct while a nomination is in the Tasks queue. */
+export interface NominationCorrection {
+  fundName?: string
+  memberNumber?: string
+  memberName?: string
+  memberDob?: string
+  email?: string
+}
+
+/** Fields operations can correct on a linked beneficiary. */
+export interface BeneficiaryCorrection {
+  title?: string
+  relationship?: string
+  identityNumber?: string
+  dateOfBirth?: string
+  benefitRevisedPct?: number
 }
 
 export interface SchemeDraft {

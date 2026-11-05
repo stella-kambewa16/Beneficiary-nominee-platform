@@ -8,6 +8,7 @@ import {
   navSections,
 } from '../navigation'
 import type { RouteState } from '../router'
+import { isTaskNomination } from '../lib/nominations'
 
 const COLLAPSE_KEY = 'mfs-sidebar-collapsed'
 
@@ -24,7 +25,8 @@ export function Layout({ route, children }: {
   children: ReactNode
 }) {
   const { role, profile } = useAuth()
-  const { loading, refreshing, error, refresh } = useData()
+  const { loading, refreshing, error, refresh, nominations } = useData()
+  const taskCount = nominations.filter(isTaskNomination).length
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const [now, setNow] = useState(() => new Date())
   const visibleNav = navItemsForRole(role)
@@ -134,6 +136,9 @@ export function Layout({ route, children }: {
                     >
                       <Icon name={item.icon} size={18} className="nav-icon" />
                       <span className="nav-text">{item.label}</span>
+                      {item.path === '/tasks' && taskCount > 0 ? (
+                        <span className="nav-count">{taskCount}</span>
+                      ) : null}
                       {active ? (
                         <Icon
                           name="chevron-right"
