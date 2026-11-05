@@ -5,6 +5,7 @@ import type { IconName } from '../components/Icon'
 import { NominationStatusBadge } from '../components/Badges'
 import { useAuth } from '../auth/auth-context'
 import { formatDateTime } from '../lib/format'
+import { nominationSchemeName } from '../lib/nominations'
 import {
   scopedBeneficiaries,
   scopedNominations,
@@ -86,20 +87,42 @@ export function DashboardPage() {
   const rejected = visibleNominations.filter(
     (item) => item.status === 'Rejected',
   ).length
+  const activeOfficers = users.filter((user) => user.status === 'Active').length
+  const assignedOfficers = users.filter(
+    (user) => user.schemeId !== null,
+  ).length
+  const assignedSchemes = schemes.filter((scheme) =>
+    users.some((user) => user.schemeId === scheme.id),
+  ).length
+  const activeSchemes = schemes.filter(
+    (scheme) => scheme.status === 'Active',
+  ).length
+  const disabledSchemes = schemes.length - activeSchemes
+  const coveredMembers = new Set(
+    visibleBeneficiaries
+      .map((item) => item.memberNumber.trim())
+      .filter(Boolean),
+  ).size
+  const averageRevisedAllocation = Math.round(
+    visibleBeneficiaries.reduce(
+      (sum, item) => sum + item.benefitRevisedPct,
+      0,
+    ) / Math.max(visibleBeneficiaries.length, 1),
+  )
 
   const recent = [...visibleNominations]
     .sort((a, b) => b.submissionDate.localeCompare(a.submissionDate))
     .slice(0, 5)
 
-  const visibleReferences = new Set(
-    visibleNominations.map((item) => item.referenceNumber),
+  const visibleNominationIds = new Set(
+    visibleNominations.map((item) => item.id),
   )
   const recentActivity = [...activity]
     .filter(
       (item) =>
         role !== 'Principal Officer' ||
-        !item.referenceNumber ||
-        visibleReferences.has(item.referenceNumber),
+        !item.nominationId ||
+        visibleNominationIds.has(item.nominationId),
     )
     .sort((a, b) => b.time.localeCompare(a.time))
     .slice(0, 6)
@@ -207,14 +230,48 @@ export function DashboardPage() {
             </p>
           </div>
         </div>
-        <div className="mini-stat-grid is-two">
+        <div className="mini-stat-grid">
           <div className="mini-stat">
             <p className="mini-stat-value">{schemes.length}</p>
             <p className="mini-stat-label">Total schemes</p>
           </div>
           <div className="mini-stat">
+            <p className="mini-stat-value">{activeSchemes}</p>
+            <p className="mini-stat-label">Active schemes</p>
+          </div>
+          <div className="mini-stat">
+            <p className="mini-stat-value">{disabledSchemes}</p>
+            <p className="mini-stat-label">Disabled schemes</p>
+          </div>
+          <div className="mini-stat">
             <p className="mini-stat-value">{users.length}</p>
-            <p className="mini-stat-label">System users</p>
+            <p className="mini-stat-label">Principal officers</p>
+          </div>
+          <div className="mini-stat">
+            <p className="mini-stat-value">{assignedSchemes}</p>
+            <p className="mini-stat-label">Schemes with an officer</p>
+          </div>
+          <div className="mini-stat">
+            <p className="mini-stat-value">{schemes.length - assignedSchemes}</p>
+            <p className="mini-stat-label">Schemes without an officer</p>
+          </div>
+          <div className="mini-stat">
+            <p className="mini-stat-value">{activeOfficers}</p>
+            <p className="mini-stat-label">Active principal officers</p>
+          </div>
+          <div className="mini-stat">
+            <p className="mini-stat-value">
+              {users.length - assignedOfficers}
+            </p>
+            <p className="mini-stat-label">Officers without a scheme</p>
+          </div>
+          <div className="mini-stat">
+            <p className="mini-stat-value">{coveredMembers}</p>
+            <p className="mini-stat-label">Members covered</p>
+          </div>
+          <div className="mini-stat">
+            <p className="mini-stat-value">{averageRevisedAllocation}%</p>
+            <p className="mini-stat-label">Average revised allocation</p>
           </div>
         </div>
       </section>
@@ -254,21 +311,19 @@ export function DashboardPage() {
                 <tbody>
                   {recent.map((nomination) => (
                     <tr
-                      key={nomination.referenceNumber}
+                      key={nomination.id}
                       className="is-clickable"
                       onClick={() =>
-                        navigate(
-                          `/nominations?ref=${nomination.referenceNumber}`,
-                        )
+                        navigate(`/nominations?nomination=${nomination.id}`)
                       }
                     >
                       <td>
                         <span className="cell-strong">
-                          {nomination.referenceNumber}
+                          {nomination.referenceNumber || nomination.id}
                         </span>
                       </td>
                       <td>{nomination.memberNumber}</td>
-                      <td>{nomination.schemeName}</td>
+                      <td>{nominationSchemeName(schemes, nomination)}</td>
                       <td>
                         <NominationStatusBadge status={nomination.status} />
                       </td>

@@ -16,25 +16,31 @@ export interface DataContextValue {
   nominations: Nomination[]
   beneficiaries: Beneficiary[]
   activity: ActivityItem[]
+  loading: boolean
+  refreshing: boolean
+  error: string | null
+  refresh: () => Promise<void>
   approveNomination: (
-    referenceNumber: string,
+    nominationId: string,
     role: UserRole,
     actor: string,
+    actorEmail: string,
     comments?: string,
-  ) => void
+  ) => Promise<void>
   rejectNomination: (
-    referenceNumber: string,
+    nominationId: string,
     role: UserRole,
     actor: string,
+    actorEmail: string,
     reason: string,
-  ) => void
-  createUser: (draft: UserDraft, actor: string) => void
-  updateUser: (id: string, draft: UserDraft, actor: string) => void
-  toggleUserStatus: (id: string, actor: string) => void
-  createScheme: (draft: SchemeDraft, actor: string) => void
-  updateScheme: (id: string, draft: SchemeDraft, actor: string) => void
-  toggleSchemeStatus: (id: string, actor: string) => void
-  getBeneficiariesForNomination: (referenceNumber: string) => Beneficiary[]
+  ) => Promise<void>
+  createUser: (draft: UserDraft, actor: string) => Promise<void>
+  updateUser: (id: string, draft: UserDraft, actor: string) => Promise<void>
+  toggleUserStatus: (id: string, actor: string) => Promise<void>
+  createScheme: (draft: SchemeDraft, actor: string) => Promise<void>
+  updateScheme: (id: string, draft: SchemeDraft, actor: string) => Promise<void>
+  toggleSchemeStatus: (id: string, actor: string) => Promise<void>
+  getBeneficiariesForNomination: (nominationId: string) => Beneficiary[]
 }
 
 export const DataContext = createContext<DataContextValue | null>(null)

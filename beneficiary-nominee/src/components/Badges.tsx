@@ -1,6 +1,5 @@
 import type {
   NominationStatus,
-  SchemeStatus,
   UserRole,
   UserStatus,
 } from '../data/types'
@@ -21,15 +20,6 @@ export function NominationStatusBadge({
 
   return (
     <span className={`badge badge-${tone}`}>
-      <span className="badge-dot" />
-      {status}
-    </span>
-  )
-}
-
-export function SchemeStatusBadge({ status }: { status: SchemeStatus }) {
-  return (
-    <span className={`badge badge-${status === 'Active' ? 'green' : 'slate'}`}>
       <span className="badge-dot" />
       {status}
     </span>

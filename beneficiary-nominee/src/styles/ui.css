@@ -85,7 +85,7 @@
 }
 
 .brand-name {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 700;
   line-height: 1.2;
   letter-spacing: -0.01em;
@@ -675,6 +675,21 @@
   flex-direction: column;
   gap: 22px;
   animation: page-in 0.24s ease both;
+}
+
+.page-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.page-heading-title {
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--mfs-text);
 }
 
 @keyframes page-in {
@@ -2103,10 +2118,12 @@ table.table tbody tr.is-clickable {
   top: 0;
   right: 0;
   z-index: 61;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(460px, 100vw);
   height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   background: var(--mfs-surface);
   box-shadow: var(--mfs-shadow-lg);
   animation: drawer-in 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -2137,6 +2154,7 @@ table.table tbody tr.is-clickable {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  flex-shrink: 0;
   padding: 20px 22px;
   border-bottom: 1px solid var(--mfs-border);
 }
@@ -2182,18 +2200,23 @@ table.table tbody tr.is-clickable {
 }
 
 .drawer-body {
-  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 20px 22px;
 }
 
 .drawer-footer {
+  z-index: 1;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
-  padding: 16px 22px;
+  padding: 16px 22px calc(16px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--mfs-border);
   background: var(--mfs-surface);
+  box-shadow: 0 -8px 18px -18px rgba(15, 23, 42, 0.45);
 }
 
 .drawer-section + .drawer-section {
@@ -2885,6 +2908,39 @@ table.table tbody tr.is-clickable {
   color: #15803d;
 }
 
+.notice.is-danger {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.data-banner {
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.data-banner-text {
+  flex: 1;
+}
+
+.data-banner-action {
+  flex-shrink: 0;
+}
+
+.data-banner .notice-icon {
+  animation: data-banner-spin 1.4s linear infinite;
+}
+
+.notice.is-danger .notice-icon {
+  animation: none;
+}
+
+@keyframes data-banner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .notice-icon {
   flex-shrink: 0;
   margin-top: 1px;
@@ -3385,8 +3441,22 @@ table.table tbody tr.is-clickable {
     width: 100vw;
   }
 
+  .page-heading-title {
+    font-size: 19px;
+  }
+
   .detail-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-height: 560px) {
+  .drawer-header {
+    padding-block: 12px;
+  }
+
+  .drawer-footer {
+    padding-block: 10px;
   }
 }
 

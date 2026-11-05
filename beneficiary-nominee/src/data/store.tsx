@@ -1,17 +1,25 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import {
-  seedActivity,
-  seedBeneficiaries,
-  seedNominations,
-  seedSchemes,
-  seedUsers,
-} from './seed'
 import { DataContext } from './context'
+import {
+  assignOfficerScheme,
+  createOfficerRecord,
+  createSchemeRecord,
+  fetchSharePointSnapshot,
+  mapBeneficiary,
+  mapNomination,
+  mapScheme,
+  mapUser,
+  resetStatusVocabulary,
+  setOfficerStatus,
+  setSchemeStatusRecord,
+  updateOfficerRecord,
+  updateSchemeRecord,
+  writeNominationDecision,
+} from './sharepoint'
+import type { DecisionStage } from './sharepoint'
 import type {
   ActivityItem,
-  ApprovalDecision,
-  ApprovalEvent,
   Beneficiary,
   Nomination,
   NominationStatus,
@@ -20,146 +28,247 @@ import type {
   SystemUser,
   UserDraft,
   UserRole,
+  UserStatus,
 } from './types'
-import { nowIso, todayIso } from '../lib/format'
+import { nowIso } from '../lib/format'
 
-let userSequence = 8
-let schemeSequence = 5
-let activitySequence = 3008
-let eventSequence = 5000
-
-function nextUserId(): string {
-  userSequence += 1
-  return `USR-${String(userSequence).padStart(3, '0')}`
+interface Snapshot {
+  schemes: Scheme[]
+  users: SystemUser[]
+  nominations: Nomination[]
+  beneficiaries: Beneficiary[]
 }
 
-function nextSchemeId(): string {
-  schemeSequence += 1
-  return `SCH-${String(schemeSequence).padStart(3, '0')}`
+const EMPTY_SNAPSHOT: Snapshot = {
+  schemes: [],
+  users: [],
+  nominations: [],
+  beneficiaries: [],
+}
+
+let activitySequence = 0
+
+function nextActivityId(): string {
+  activitySequence += 1
+  return `ACT-${Date.now()}-${activitySequence}`
+}
+
+function describeLoadError(error: unknown): string {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : ''
+
+  if (
+    !message.trim() ||
+    /host|connector|power apps|not available|unauthor|forbidden|network|fetch|failed/i.test(
+      message,
+    )
+  ) {
+    return [
+      'Could not read the SharePoint lists.',
+      'Open this app through the Power Apps Local Play URL printed by `pa app run` so the SharePoint connection is available.',
+      message.trim(),
+    ]
+      .filter(Boolean)
+      .join(' ')
+  }
+
+  return message
+}
+
+function decisionStage(
+  role: UserRole,
+  status: NominationStatus,
+): DecisionStage | null {
+  if (
+    status === 'Pending PO Approval' &&
+    (role === 'Principal Officer' || role === 'Admin')
+  ) {
+    return 'PO'
+  }
+  if (
+    status === 'Pending PM Approval' &&
+    (role === 'Pension Manager' || role === 'Admin')
+  ) {
+    return 'PM'
+  }
+  return null
+}
+
+function stageMessage(role: UserRole, status: NominationStatus): string {
+  if (status === 'Approved' || status === 'Rejected') {
+    return 'This nomination has already been decided.'
+  }
+  if (status === 'Pending PO Approval') {
+    return role === 'Pension Manager'
+      ? 'This nomination is still awaiting Principal Officer endorsement.'
+      : 'This nomination is awaiting Principal Officer endorsement.'
+  }
+  return role === 'Principal Officer'
+    ? 'This nomination is awaiting Pension Manager approval.'
+    : 'This nomination is awaiting Pension Manager approval.'
 }
 
 export function DataProvider({ children }: { children: ReactNode }) {
-  const [schemes, setSchemes] = useState<Scheme[]>(seedSchemes)
-  const [users, setUsers] = useState<SystemUser[]>(seedUsers)
-  const [nominations, setNominations] = useState<Nomination[]>(seedNominations)
-  const [beneficiaries, setBeneficiaries] =
-    useState<Beneficiary[]>(seedBeneficiaries)
-  const [activity, setActivity] = useState<ActivityItem[]>(seedActivity)
+  const [snapshot, setSnapshot] = useState<Snapshot>(EMPTY_SNAPSHOT)
+  const [sessionActivity, setSessionActivity] = useState<ActivityItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async (mode: 'initial' | 'refresh') => {
+    if (mode === 'refresh') {
+      setRefreshing(true)
+    }
+
+    try {
+      resetStatusVocabulary()
+      const raw = await fetchSharePointSnapshot()
+      const schemes = raw.schemeRecords.map(mapScheme)
+      const users = raw.officerRecords.map((record) =>
+        mapUser(record, schemes),
+      )
+      const nominations = raw.nominationRecords.map((record) =>
+        mapNomination(record, schemes),
+      )
+      const beneficiaries = raw.nomineeRecords.map(mapBeneficiary)
+
+      setSnapshot({ schemes, users, nominations, beneficiaries })
+      setError(null)
+    } catch (loadError) {
+      setError(describeLoadError(loadError))
+    } finally {
+      if (mode === 'initial') {
+        setLoading(false)
+      } else {
+        setRefreshing(false)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    // Defer the initial read so the provider mounts before state updates.
+    const timer = window.setTimeout(() => {
+      void load('initial')
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [load])
+
+  const refresh = useCallback(() => load('refresh'), [load])
 
   const pushActivity = useCallback(
-    (
-      action: string,
-      subject: string,
-      detail: string,
-      actor: string,
-      referenceNumber: string,
-    ) => {
-      activitySequence += 1
-      const entry: ActivityItem = {
-        id: `ACT-${activitySequence}`,
-        action,
-        subject,
-        detail,
-        actor,
-        time: nowIso(),
-        referenceNumber,
-      }
-      setActivity((current) => [entry, ...current])
+    (entry: Omit<ActivityItem, 'id' | 'time'>) => {
+      setSessionActivity((current) => [
+        { ...entry, id: nextActivityId(), time: nowIso() },
+        ...current,
+      ])
     },
     [],
   )
 
+  const activity = useMemo(() => {
+    const derived: ActivityItem[] = snapshot.nominations.flatMap(
+      (nomination) =>
+        nomination.approvalHistory.map((event) => ({
+          id: `ACT-${nomination.id}-${event.id}`,
+          action:
+            event.decision === 'Submitted'
+              ? 'Nomination submitted'
+              : `${event.stage} ${event.decision.toLowerCase()}`,
+          subject: nomination.memberName,
+          detail: [
+            nomination.referenceNumber || `Nomination ${nomination.id}`,
+            event.actor,
+            event.comments,
+          ]
+            .filter(Boolean)
+            .join(' · '),
+          actor: event.actor,
+          time: event.date,
+          referenceNumber: nomination.referenceNumber,
+          nominationId: nomination.id,
+        })),
+    )
+
+    return [...sessionActivity, ...derived].sort((a, b) =>
+      b.time.localeCompare(a.time),
+    )
+  }, [sessionActivity, snapshot.nominations])
+
   const approveNomination = useCallback(
-    (
-      referenceNumber: string,
+    async (
+      nominationId: string,
       role: UserRole,
       actor: string,
+      actorEmail: string,
       comments = '',
     ) => {
-      const nomination = nominations.find(
-        (item) => item.referenceNumber === referenceNumber,
+      const nomination = snapshot.nominations.find(
+        (item) => item.id === nominationId,
       )
       if (!nomination) {
         throw new Error('The selected nomination could not be found.')
       }
 
-      let nextStatus: NominationStatus
-      let stage: string
-      let decision: ApprovalDecision
-
-      if (role === 'Principal Officer') {
-        if (nomination.status !== 'Pending PO Approval') {
-          throw new Error(
-            'This nomination is not awaiting Principal Officer approval.',
-          )
-        }
-        nextStatus = 'Pending PM Approval'
-        stage = 'Principal Officer review'
-        decision = 'Endorsed'
-      } else if (role === 'Pension Manager') {
-        if (nomination.status !== 'Pending PM Approval') {
-          throw new Error(
-            'This nomination is not awaiting Pension Manager approval.',
-          )
-        }
-        nextStatus = 'Approved'
-        stage = 'Pension Manager review'
-        decision = 'Approved'
-      } else if (nomination.status === 'Pending PO Approval') {
-        nextStatus = 'Pending PM Approval'
-        stage = 'Administrator review (PO stage)'
-        decision = 'Endorsed'
-      } else if (nomination.status === 'Pending PM Approval') {
-        nextStatus = 'Approved'
-        stage = 'Administrator review (PM stage)'
-        decision = 'Approved'
-      } else {
-        throw new Error('This nomination has already been decided.')
+      const stage = decisionStage(role, nomination.status)
+      if (!stage) {
+        throw new Error(stageMessage(role, nomination.status))
       }
 
-      eventSequence += 1
-      const event: ApprovalEvent = {
-        id: `EVT-${eventSequence}`,
+      const nextStatus: NominationStatus =
+        stage === 'PO' ? 'Pending PM Approval' : 'Approved'
+      const comment =
+        comments.trim() ||
+        (stage === 'PO'
+          ? 'Endorsed for final approval.'
+          : 'Final approval granted.')
+
+      const updated = await writeNominationDecision(nomination.id, {
+        status: nextStatus,
         stage,
         actor,
-        decision,
-        date: todayIso(),
-        comments:
-          comments.trim() ||
-          (decision === 'Endorsed'
-            ? 'Endorsed for final approval.'
-            : 'Final approval granted.'),
-      }
+        actorEmail,
+        comment,
+      })
+      const mapped = mapNomination(updated, snapshot.schemes)
 
-      setNominations((current) =>
-        current.map((item) =>
-          item.referenceNumber === referenceNumber
-            ? {
-                ...item,
-                status: nextStatus,
-                approvalHistory: [...item.approvalHistory, event],
-              }
-            : item,
+      setSnapshot((current) => ({
+        ...current,
+        nominations: current.nominations.map((item) =>
+          item.id === mapped.id ? mapped : item,
         ),
-      )
+      }))
 
-      pushActivity(
-        decision === 'Endorsed'
-          ? 'Principal Officer endorsed'
-          : 'Nomination approved',
-        nomination.memberName,
-        `${referenceNumber} was ${decision.toLowerCase()} by ${actor}.`,
+      pushActivity({
+        action:
+          stage === 'PO'
+            ? 'Principal Officer endorsed'
+            : 'Nomination approved',
+        subject: nomination.memberName,
+        detail: `${
+          nomination.referenceNumber || `Nomination ${nomination.id}`
+        } was ${stage === 'PO' ? 'endorsed' : 'approved'} by ${actor}.`,
         actor,
-        referenceNumber,
-      )
+        referenceNumber: nomination.referenceNumber,
+        nominationId: nomination.id,
+      })
     },
-    [nominations, pushActivity],
+    [snapshot.nominations, snapshot.schemes, pushActivity],
   )
 
   const rejectNomination = useCallback(
-    (referenceNumber: string, role: UserRole, actor: string, reason: string) => {
-      const nomination = nominations.find(
-        (item) => item.referenceNumber === referenceNumber,
+    async (
+      nominationId: string,
+      role: UserRole,
+      actor: string,
+      actorEmail: string,
+      reason: string,
+    ) => {
+      const nomination = snapshot.nominations.find(
+        (item) => item.id === nominationId,
       )
       if (!nomination) {
         throw new Error('The selected nomination could not be found.')
@@ -167,324 +276,335 @@ export function DataProvider({ children }: { children: ReactNode }) {
       if (!reason.trim()) {
         throw new Error('A rejection reason is required.')
       }
-      if (
-        role === 'Principal Officer' &&
-        nomination.status !== 'Pending PO Approval'
-      ) {
-        throw new Error(
-          'This nomination is not awaiting Principal Officer approval.',
-        )
-      }
-      if (
-        role === 'Pension Manager' &&
-        nomination.status !== 'Pending PM Approval'
-      ) {
-        throw new Error(
-          'This nomination is not awaiting Pension Manager approval.',
-        )
-      }
-      if (
-        role === 'Admin' &&
-        nomination.status !== 'Pending PO Approval' &&
-        nomination.status !== 'Pending PM Approval'
-      ) {
-        throw new Error('This nomination has already been decided.')
+
+      const stage = decisionStage(role, nomination.status)
+      if (!stage) {
+        throw new Error(stageMessage(role, nomination.status))
       }
 
-      eventSequence += 1
-      const event: ApprovalEvent = {
-        id: `EVT-${eventSequence}`,
-        stage:
-          role === 'Pension Manager'
-            ? 'Pension Manager review'
-            : role === 'Admin'
-              ? 'Administrator review'
-              : 'Principal Officer review',
+      const updated = await writeNominationDecision(nomination.id, {
+        status: 'Rejected',
+        stage,
         actor,
-        decision: 'Rejected',
-        date: todayIso(),
-        comments: reason.trim(),
-      }
+        actorEmail,
+        comment: reason.trim(),
+      })
+      const mapped = mapNomination(updated, snapshot.schemes)
 
-      setNominations((current) =>
-        current.map((item) =>
-          item.referenceNumber === referenceNumber
-            ? {
-                ...item,
-                status: 'Rejected',
-                approvalHistory: [...item.approvalHistory, event],
-              }
-            : item,
+      setSnapshot((current) => ({
+        ...current,
+        nominations: current.nominations.map((item) =>
+          item.id === mapped.id ? mapped : item,
         ),
-      )
+      }))
 
-      pushActivity(
-        'Nomination rejected',
-        nomination.memberName,
-        `${referenceNumber} was rejected by ${actor}: ${reason.trim()}`,
+      pushActivity({
+        action: 'Nomination rejected',
+        subject: nomination.memberName,
+        detail: `${
+          nomination.referenceNumber || `Nomination ${nomination.id}`
+        } was rejected by ${actor}: ${reason.trim()}`,
         actor,
-        referenceNumber,
-      )
+        referenceNumber: nomination.referenceNumber,
+        nominationId: nomination.id,
+      })
     },
-    [nominations, pushActivity],
+    [snapshot.nominations, snapshot.schemes, pushActivity],
   )
 
   const createUser = useCallback(
-    (draft: UserDraft, actor: string) => {
-      const id = nextUserId()
+    async (draft: UserDraft, actor: string) => {
+      const name = draft.name.trim()
+      const email = draft.email.trim()
+      if (!name) throw new Error('Enter the principal officer name.')
+      if (!email) throw new Error('Enter the principal officer email address.')
+
       const scheme = draft.schemeId
-        ? schemes.find((item) => item.id === draft.schemeId)
-        : undefined
-      const newUser: SystemUser = {
-        id,
-        name: draft.name.trim(),
-        email: draft.email.trim(),
+        ? (snapshot.schemes.find((item) => item.id === draft.schemeId) ?? null)
+        : null
+
+      const created = await createOfficerRecord({
+        name,
+        email,
         phone: draft.phone.trim(),
-        role: draft.role,
-        schemeId: draft.role === 'Principal Officer' ? draft.schemeId : null,
         status: draft.status,
-        createdDate: todayIso(),
-      }
-
-      setUsers((current) => {
-        const cleared =
-          newUser.role === 'Principal Officer' && newUser.schemeId
-            ? current.map((user) =>
-                user.schemeId === newUser.schemeId
-                  ? { ...user, schemeId: null }
-                  : user,
-              )
-            : current
-        return [newUser, ...cleared]
+        scheme,
       })
+      const mapped = mapUser(created, snapshot.schemes)
 
-      pushActivity(
-        'User created',
-        newUser.name,
-        `${newUser.role} account created${
-          scheme ? ` and assigned to ${scheme.name}` : ''
-        }.`,
+      setSnapshot((current) => ({
+        ...current,
+        users: [mapped, ...current.users.filter((user) => user.id !== mapped.id)],
+      }))
+
+      pushActivity({
+        action: 'Principal officer created',
+        subject: name,
+        detail: `${name} was added${scheme ? ` for ${scheme.name}` : ''}.`,
         actor,
-        '',
-      )
+        referenceNumber: '',
+      })
     },
-    [pushActivity, schemes],
+    [snapshot.schemes, pushActivity],
   )
 
   const updateUser = useCallback(
-    (id: string, draft: UserDraft, actor: string) => {
-      const existing = users.find((user) => user.id === id)
+    async (id: string, draft: UserDraft, actor: string) => {
+      const existing = snapshot.users.find((user) => user.id === id)
       if (!existing) {
-        throw new Error('The selected user could not be found.')
+        throw new Error('The selected principal officer could not be found.')
       }
-      const normalized: UserDraft = {
-        ...draft,
-        name: draft.name.trim(),
-        email: draft.email.trim(),
+
+      const name = draft.name.trim()
+      const email = draft.email.trim()
+      if (!name) throw new Error('Enter the principal officer name.')
+      if (!email) throw new Error('Enter the principal officer email address.')
+
+      const scheme = draft.schemeId
+        ? (snapshot.schemes.find((item) => item.id === draft.schemeId) ?? null)
+        : null
+
+      const updated = await updateOfficerRecord(id, {
+        name,
+        email,
         phone: draft.phone.trim(),
-        schemeId:
-          draft.role === 'Principal Officer' ? draft.schemeId : null,
-      }
-      const scheme = normalized.schemeId
-        ? schemes.find((item) => item.id === normalized.schemeId)
-        : undefined
-
-      setUsers((current) => {
-        const cleared =
-          normalized.role === 'Principal Officer' && normalized.schemeId
-            ? current.map((user) =>
-                user.id !== id && user.schemeId === normalized.schemeId
-                  ? { ...user, schemeId: null }
-                  : user,
-              )
-            : current
-        return cleared.map((user) =>
-          user.id === id ? { ...user, ...normalized } : user,
-        )
+        status: draft.status,
+        scheme,
       })
+      const mapped = mapUser(updated, snapshot.schemes)
 
-      pushActivity(
-        'User updated',
-        normalized.name,
-        `${normalized.role} account updated${
-          scheme ? ` and assigned to ${scheme.name}` : ''
+      setSnapshot((current) => ({
+        ...current,
+        users: current.users.map((user) =>
+          user.id === mapped.id ? mapped : user,
+        ),
+      }))
+
+      pushActivity({
+        action: 'Principal officer updated',
+        subject: name,
+        detail: `${name}'s account was updated${
+          scheme ? ` for ${scheme.name}` : ''
         }.`,
         actor,
-        '',
-      )
+        referenceNumber: '',
+      })
     },
-    [pushActivity, schemes, users],
+    [snapshot.schemes, snapshot.users, pushActivity],
   )
 
   const toggleUserStatus = useCallback(
-    (id: string, actor: string) => {
-      const existing = users.find((user) => user.id === id)
+    async (id: string, actor: string) => {
+      const existing = snapshot.users.find((user) => user.id === id)
       if (!existing) {
-        throw new Error('The selected user could not be found.')
+        throw new Error('The selected principal officer could not be found.')
       }
-      const nextStatus = existing.status === 'Active' ? 'Disabled' : 'Active'
 
-      setUsers((current) =>
-        current.map((user) =>
-          user.id === id ? { ...user, status: nextStatus } : user,
+      const nextStatus: UserStatus =
+        existing.status === 'Active' ? 'Disabled' : 'Active'
+      const updated = await setOfficerStatus(id, nextStatus)
+      const mapped = mapUser(updated, snapshot.schemes)
+
+      setSnapshot((current) => ({
+        ...current,
+        users: current.users.map((user) =>
+          user.id === mapped.id ? mapped : user,
         ),
-      )
+      }))
 
-      pushActivity(
-        nextStatus === 'Disabled' ? 'User disabled' : 'User enabled',
-        existing.name,
-        `${existing.name}'s account was ${nextStatus.toLowerCase()}.`,
+      pushActivity({
+        action: nextStatus === 'Disabled' ? 'User disabled' : 'User enabled',
+        subject: existing.name,
+        detail: `${existing.name}'s account was ${nextStatus.toLowerCase()}.`,
         actor,
-        '',
-      )
+        referenceNumber: '',
+      })
     },
-    [pushActivity, users],
+    [snapshot.schemes, snapshot.users, pushActivity],
   )
 
   const createScheme = useCallback(
-    (draft: SchemeDraft, actor: string) => {
-      const id = nextSchemeId()
-      const newScheme: Scheme = {
-        id,
-        name: draft.name.trim(),
-        description: draft.description.trim(),
-        status: draft.status,
-        createdDate: todayIso(),
-      }
-      const officer = draft.principalOfficerId
-        ? users.find((user) => user.id === draft.principalOfficerId)
-        : undefined
+    async (draft: SchemeDraft, actor: string) => {
+      const name = draft.name.trim()
+      if (!name) throw new Error('Enter a scheme name.')
 
-      setSchemes((current) => [newScheme, ...current])
-      if (officer) {
-        setUsers((current) =>
-          current.map((user) =>
-            user.id === officer.id
-              ? { ...user, schemeId: id, role: 'Principal Officer' }
-              : user,
-          ),
+      const created = await createSchemeRecord(name)
+      const mapped = mapScheme(created)
+      const nextSchemes = [...snapshot.schemes, mapped]
+
+      let officer: SystemUser | undefined
+      if (draft.principalOfficerId) {
+        const existingOfficer = snapshot.users.find(
+          (user) => user.id === draft.principalOfficerId,
         )
+        if (!existingOfficer) {
+          throw new Error('The selected principal officer could not be found.')
+        }
+        const record = await assignOfficerScheme(existingOfficer.id, mapped)
+        officer = mapUser(record, nextSchemes)
       }
 
-      pushActivity(
-        'Scheme created',
-        newScheme.name,
-        `${newScheme.name} was created${
+      setSnapshot((current) => ({
+        ...current,
+        schemes: [...current.schemes.filter((item) => item.id !== mapped.id), mapped],
+        users: officer
+          ? current.users.map((user) =>
+              user.id === officer.id ? officer : user,
+            )
+          : current.users,
+      }))
+
+      pushActivity({
+        action: 'Scheme created',
+        subject: mapped.name,
+        detail: `${mapped.name} was created${
           officer ? ` with ${officer.name} as Principal Officer` : ''
         }.`,
         actor,
-        '',
-      )
+        referenceNumber: '',
+      })
     },
-    [pushActivity, users],
+    [snapshot.schemes, snapshot.users, pushActivity],
   )
 
   const updateScheme = useCallback(
-    (id: string, draft: SchemeDraft, actor: string) => {
-      const existing = schemes.find((scheme) => scheme.id === id)
+    async (id: string, draft: SchemeDraft, actor: string) => {
+      const existing = snapshot.schemes.find((scheme) => scheme.id === id)
       if (!existing) {
         throw new Error('The selected scheme could not be found.')
       }
-      const officer = draft.principalOfficerId
-        ? users.find((user) => user.id === draft.principalOfficerId)
-        : undefined
 
-      setSchemes((current) =>
-        current.map((scheme) =>
-          scheme.id === id
-            ? {
-                ...scheme,
-                name: draft.name.trim(),
-                description: draft.description.trim(),
-                status: draft.status,
-              }
-            : scheme,
-        ),
+      const name = draft.name.trim()
+      if (!name) throw new Error('Enter a scheme name.')
+
+      const updated = await updateSchemeRecord(id, name)
+      const mapped = mapScheme(updated)
+      const nextSchemes = snapshot.schemes.map((scheme) =>
+        scheme.id === id ? mapped : scheme,
       )
+      const officerUpdates = new Map<string, SystemUser>()
 
-      setUsers((current) => {
-        const cleared = current.map((user) =>
-          user.schemeId === id && user.id !== officer?.id
-            ? { ...user, schemeId: null }
-            : user,
+      if (draft.principalOfficerId) {
+        const officer = snapshot.users.find(
+          (user) => user.id === draft.principalOfficerId,
         )
-        return officer
-          ? cleared.map((user) =>
-              user.id === officer.id
-                ? { ...user, schemeId: id, role: 'Principal Officer' }
-                : user,
-            )
-          : cleared
-      })
-
-      if (existing.name !== draft.name.trim()) {
-        setNominations((current) =>
-          current.map((nomination) =>
-            nomination.schemeId === id
-              ? { ...nomination, schemeName: draft.name.trim() }
-              : nomination,
-          ),
-        )
-        setBeneficiaries((current) =>
-          current.map((beneficiary) =>
-            beneficiary.fundName === existing.name
-              ? { ...beneficiary, fundName: draft.name.trim() }
-              : beneficiary,
-          ),
-        )
+        if (!officer) {
+          throw new Error('The selected principal officer could not be found.')
+        }
+        const record = await assignOfficerScheme(officer.id, mapped)
+        officerUpdates.set(officer.id, mapUser(record, nextSchemes))
       }
 
-      pushActivity(
-        'Scheme updated',
-        draft.name.trim(),
-        `${existing.name} was updated${
-          officer ? ` and assigned to ${officer.name}` : ''
+      const nameChanged =
+        existing.title !== mapped.title ||
+        existing.schemeName !== mapped.schemeName
+
+      if (nameChanged) {
+        // Keep the schemecode/schemename values on assigned officers aligned
+        // with the renamed scheme.
+        const assigned = snapshot.users.filter(
+          (user) =>
+            user.schemeId === id && user.id !== draft.principalOfficerId,
+        )
+        for (const user of assigned) {
+          const record = await assignOfficerScheme(user.id, mapped)
+          officerUpdates.set(user.id, mapUser(record, nextSchemes))
+        }
+      }
+
+      setSnapshot((current) => ({
+        ...current,
+        schemes: current.schemes.map((scheme) =>
+          scheme.id === id ? mapped : scheme,
+        ),
+        users: current.users.map(
+          (user) =>
+            officerUpdates.get(user.id) ??
+            (user.schemeId === id
+              ? {
+                  ...user,
+                  schemeName: mapped.name,
+                  schemeCode: mapped.title || mapped.name,
+                }
+              : user),
+        ),
+      }))
+
+      pushActivity({
+        action: 'Scheme updated',
+        subject: mapped.name,
+        detail: `${existing.name} was updated${
+          draft.principalOfficerId
+            ? ` and reassigned to a principal officer`
+            : ''
         }.`,
         actor,
-        '',
-      )
+        referenceNumber: '',
+      })
     },
-    [pushActivity, schemes, users],
+    [snapshot.schemes, snapshot.users, pushActivity],
   )
 
   const toggleSchemeStatus = useCallback(
-    (id: string, actor: string) => {
-      const existing = schemes.find((scheme) => scheme.id === id)
+    async (id: string, actor: string) => {
+      const existing = snapshot.schemes.find((scheme) => scheme.id === id)
       if (!existing) {
         throw new Error('The selected scheme could not be found.')
       }
-      const nextStatus = existing.status === 'Active' ? 'Inactive' : 'Active'
 
-      setSchemes((current) =>
-        current.map((scheme) =>
-          scheme.id === id ? { ...scheme, status: nextStatus } : scheme,
+      const nextStatus =
+        existing.status === 'Active' ? 'Disabled' : 'Active'
+      const updated = await setSchemeStatusRecord(id, nextStatus)
+      const mapped = mapScheme(updated)
+
+      setSnapshot((current) => ({
+        ...current,
+        schemes: current.schemes.map((scheme) =>
+          scheme.id === mapped.id ? mapped : scheme,
         ),
-      )
+      }))
 
-      pushActivity(
-        nextStatus === 'Inactive' ? 'Scheme deactivated' : 'Scheme activated',
-        existing.name,
-        `${existing.name} was ${nextStatus.toLowerCase()}.`,
+      pushActivity({
+        action: nextStatus === 'Disabled' ? 'Scheme disabled' : 'Scheme enabled',
+        subject: existing.name,
+        detail: `${existing.name} was ${
+          nextStatus === 'Disabled' ? 'disabled' : 'enabled'
+        }.`,
         actor,
-        '',
-      )
+        referenceNumber: '',
+      })
     },
-    [pushActivity, schemes],
+    [snapshot.schemes, pushActivity],
   )
 
   const getBeneficiariesForNomination = useCallback(
-    (referenceNumber: string) =>
-      beneficiaries.filter((item) => item.refNumber === referenceNumber),
-    [beneficiaries],
+    (nominationId: string) => {
+      const nomination = snapshot.nominations.find(
+        (item) => item.id === nominationId,
+      )
+      if (!nomination) return []
+      return snapshot.beneficiaries.filter(
+        (beneficiary) =>
+          (nomination.referenceNumber !== '' &&
+            beneficiary.refNumber === nomination.referenceNumber) ||
+          (beneficiary.memberItemId !== null &&
+            String(beneficiary.memberItemId) === nomination.id),
+      )
+    },
+    [snapshot.beneficiaries, snapshot.nominations],
   )
 
   const value = useMemo(
     () => ({
-      schemes,
-      users,
-      nominations,
-      beneficiaries,
+      schemes: snapshot.schemes,
+      users: snapshot.users,
+      nominations: snapshot.nominations,
+      beneficiaries: snapshot.beneficiaries,
       activity,
+      loading,
+      refreshing,
+      error,
+      refresh,
       approveNomination,
       rejectNomination,
       createUser,
@@ -496,20 +616,24 @@ export function DataProvider({ children }: { children: ReactNode }) {
       getBeneficiariesForNomination,
     }),
     [
-      schemes,
-      users,
-      nominations,
-      beneficiaries,
       activity,
       approveNomination,
-      rejectNomination,
-      createUser,
-      updateUser,
-      toggleUserStatus,
       createScheme,
-      updateScheme,
-      toggleSchemeStatus,
+      createUser,
+      error,
       getBeneficiariesForNomination,
+      loading,
+      refresh,
+      refreshing,
+      rejectNomination,
+      snapshot.beneficiaries,
+      snapshot.nominations,
+      snapshot.schemes,
+      snapshot.users,
+      toggleSchemeStatus,
+      toggleUserStatus,
+      updateScheme,
+      updateUser,
     ],
   )
 

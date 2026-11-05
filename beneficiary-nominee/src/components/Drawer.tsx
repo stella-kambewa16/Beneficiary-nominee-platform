@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { Icon } from './Icon'
 
 interface DrawerProps {
@@ -40,7 +41,7 @@ export function Drawer({
 
   if (!open) return null
 
-  return (
+  return createPortal(
     <>
       <div className="drawer-scrim" onClick={onClose} aria-hidden="true" />
       <aside
@@ -70,6 +71,7 @@ export function Drawer({
 
         {footer ? <footer className="drawer-footer">{footer}</footer> : null}
       </aside>
-    </>
+    </>,
+    document.body,
   )
 }

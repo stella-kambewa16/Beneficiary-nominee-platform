@@ -327,30 +327,10 @@ export function ReportsPage() {
     setStatus('All')
   }
 
-  const officerCount = new Set(
-    officerActivity.map(({ event }) => event.actor),
-  ).size
-  const assignedOfficers = users.filter(
-    (user) => user.role === 'Principal Officer',
-  ).length
-  const activeSchemes = schemes.filter(
-    (scheme) => scheme.status === 'Active',
-  ).length
-
   return (
     <div className="page-stack">
-      <section className="hero">
-        <div className="hero-main">
-          <span className="hero-eyebrow">
-            <Icon name="chart" size={13} />
-            Reporting
-          </span>
-          <h1 className="hero-title">Nomination reports</h1>
-          <p className="hero-text">
-            Review nomination, approval and beneficiary activity, then export
-            the current view to Excel or print it as a PDF.
-          </p>
-        </div>
+      <header className="page-heading">
+        <h1 className="page-heading-title">Nomination reports</h1>
         <div className="hero-actions">
           <button
             type="button"
@@ -369,15 +349,12 @@ export function ReportsPage() {
             Export PDF
           </button>
         </div>
-      </section>
+      </header>
 
       <section className="panel print-hide">
         <div className="panel-header">
           <div className="panel-heading">
             <h2 className="panel-title">Choose a report</h2>
-            <p className="panel-subtitle">
-              Select the report you want to preview and export.
-            </p>
           </div>
         </div>
 
@@ -396,7 +373,6 @@ export function ReportsPage() {
               </span>
               <span className="action-copy">
                 <span className="action-title">{report.title}</span>
-                <span className="action-text">{report.description}</span>
               </span>
               <Icon
                 name="chevron-right"
@@ -414,11 +390,6 @@ export function ReportsPage() {
             <h2 className="panel-title">{activeReport.title}</h2>
             <p className="panel-subtitle">
               {activeReport.description}
-              {reportId === 'principal-officer-activity' && officerCount
-                ? ` ${officerCount} principal officer${
-                    officerCount === 1 ? '' : 's'
-                  } recorded a decision in this view.`
-                : ''}
             </p>
           </div>
           <div className="panel-actions">
@@ -550,12 +521,6 @@ export function ReportsPage() {
           </div>
         )}
 
-        <div className="panel-footer">
-          <p className="help">
-            {assignedOfficers} principal officers are assigned across{' '}
-            {activeSchemes} active schemes. Exports reflect the filters above.
-          </p>
-        </div>
       </section>
     </div>
   )

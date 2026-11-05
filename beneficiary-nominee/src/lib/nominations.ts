@@ -9,11 +9,22 @@ import type {
 } from '../data/types'
 
 export function schemeName(schemes: Scheme[], id: string): string {
+  if (!id) return '—'
   return schemes.find((scheme) => scheme.id === id)?.name ?? '—'
 }
 
+export function nominationSchemeName(
+  schemes: Scheme[],
+  nomination: Nomination,
+): string {
+  const matched = schemeName(schemes, nomination.schemeId)
+  return matched === '—'
+    ? nomination.schemeName || nomination.fundName || '—'
+    : matched
+}
+
 export function userSchemeLabel(user: SystemUser, schemes: Scheme[]): string {
-  if (!user.schemeId) return 'All schemes'
+  if (!user.schemeId) return user.schemeName || user.schemeCode || 'Unassigned'
   return schemeName(schemes, user.schemeId)
 }
 
@@ -21,9 +32,7 @@ export function principalOfficerForScheme(
   users: SystemUser[],
   schemeId: string,
 ): SystemUser | undefined {
-  return users.find(
-    (user) => user.role === 'Principal Officer' && user.schemeId === schemeId,
-  )
+  return users.find((user) => user.schemeId === schemeId)
 }
 
 export function principalOfficerName(
@@ -67,6 +76,7 @@ export interface NominationActivity {
   date: string
   decision: ApprovalEvent['decision']
   referenceNumber: string
+  nominationId: string
 }
 
 export function nominationActivity(
@@ -75,16 +85,19 @@ export function nominationActivity(
   return nominations
     .flatMap((nomination) =>
       nomination.approvalHistory.map((event, index) => ({
-        id: `${nomination.referenceNumber}-${index}`,
+        id: `${nomination.id}-${index}`,
         action:
           event.decision === 'Submitted'
             ? 'Nomination submitted'
             : `${event.stage} ${event.decision.toLowerCase()}`,
         subject: nomination.memberName,
-        detail: `${nomination.referenceNumber} · ${event.actor}`,
+        detail: `${nomination.referenceNumber || nomination.id} · ${
+          event.actor
+        }`,
         date: event.date,
         decision: event.decision,
         referenceNumber: nomination.referenceNumber,
+        nominationId: nomination.id,
       })),
     )
     .sort((a, b) => b.date.localeCompare(a.date))

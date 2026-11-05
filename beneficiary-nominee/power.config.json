@@ -10,6 +10,35 @@
   "buildEntryPoint": "index.html",
   "localAppUrl": "http://localhost:3000",
   "logoPath": "Default",
-  "connectionReferences": {},
+  "connectionReferences": {
+    "e1f53340-f4cc-47e6-b1af-ac394a28fb20": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+      "displayName": "SharePoint",
+      "dataSources": [
+        "schemes",
+        "principalofficers",
+        "nominationmembers",
+        "nominationnominees"
+      ],
+      "dataSets": {
+        "https://uapgroup.sharepoint.com/sites/bnf": {
+          "dataSources": {
+            "schemes": {
+              "tableName": "0347d8cd-dc91-4438-80d6-af07ef478be2"
+            },
+            "principalofficers": {
+              "tableName": "f96c81db-00c6-476e-bdb9-6cd5183de131"
+            },
+            "nominationmembers": {
+              "tableName": "5bf909ce-55d4-4979-83a8-1d508c08d1bb"
+            },
+            "nominationnominees": {
+              "tableName": "27fc663a-d022-4034-aedb-793831319bdd"
+            }
+          }
+        }
+      }
+    }
+  },
   "databaseReferences": {}
 }

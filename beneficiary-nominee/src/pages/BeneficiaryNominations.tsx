@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useData } from '../data/context'
 import type { RouteState } from '../router'
-import { navigate } from '../router'
 import { Icon } from '../components/Icon'
 import {
   AllocationBar,
@@ -15,7 +14,7 @@ import { formatDate, initials } from '../lib/format'
 import {
   canActOnNomination,
   nextStageLabel,
-  schemeName,
+  nominationSchemeName,
 } from '../lib/nominations'
 import { scopedBeneficiaries, scopedNominations } from '../lib/scope'
 import type { Nomination, NominationStatus } from '../data/types'
@@ -37,12 +36,20 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<StatusFilter>('All')
   const [schemeId, setSchemeId] = useState('All')
-  const [selectedRef, setSelectedRef] = useState<string | null>(
-    route.query.get('ref'),
-  )
+  const [selectedId, setSelectedId] = useState<string | null>(() => {
+    const fromQuery = route.query.get('nomination')
+    if (fromQuery) return fromQuery
+    const legacyRef = route.query.get('ref')
+    if (!legacyRef) return null
+    const match = nominations.find(
+      (item) => item.referenceNumber === legacyRef,
+    )
+    return match?.id ?? null
+  })
   const [rejecting, setRejecting] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
   const [rejectError, setRejectError] = useState('')
+  const [busy, setBusy] = useState(false)
 
   const visibleNominations = scopedNominations(
     role,
@@ -68,7 +75,8 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
         nomination.memberName,
         nomination.email,
         nomination.schemeName,
-        schemeName(schemes, nomination.schemeId),
+        nomination.fundName,
+        nominationSchemeName(schemes, nomination),
       ]
         .join(' ')
         .toLowerCase()
@@ -80,11 +88,14 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
   })
 
   const selected =
-    visibleNominations.find((item) => item.referenceNumber === selectedRef) ??
-    null
+    visibleNominations.find((item) => item.id === selectedId) ?? null
   const selectedBeneficiaries = selected
     ? visibleBeneficiaries.filter(
-        (item) => item.refNumber === selected.referenceNumber,
+        (item) =>
+          (selected.referenceNumber !== '' &&
+            item.refNumber === selected.referenceNumber) ||
+          (item.memberItemId !== null &&
+            String(item.memberItemId) === selected.id),
       )
     : []
   const canAct = selected
@@ -96,42 +107,36 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
         .find((event) => event.decision === 'Rejected')
     : undefined
 
-  const counts = {
-    total: visibleNominations.length,
-    pendingPo: visibleNominations.filter(
-      (item) => item.status === 'Pending PO Approval',
-    ).length,
-    pendingPm: visibleNominations.filter(
-      (item) => item.status === 'Pending PM Approval',
-    ).length,
-    approved: visibleNominations.filter((item) => item.status === 'Approved')
-      .length,
-  }
-
-  const openNomination = (referenceNumber: string) => {
-    setSelectedRef(referenceNumber)
+  const openNomination = (nominationId: string) => {
+    setSelectedId(nominationId)
     setRejecting(false)
     setRejectReason('')
     setRejectError('')
   }
 
   const closeDrawer = () => {
-    setSelectedRef(null)
+    setSelectedId(null)
     setRejecting(false)
     setRejectReason('')
     setRejectError('')
   }
 
-  const handleApprove = (
-    referenceNumber: string,
+  const handleApprove = async (
+    nominationId: string,
     currentStatus: NominationStatus,
   ) => {
+    setBusy(true)
     try {
-      approveNomination(referenceNumber, role, profile.name)
+      await approveNomination(
+        nominationId,
+        role,
+        profile.name,
+        profile.email,
+      )
       notify(
         'success',
         'Nomination updated',
-        `${referenceNumber} moved to ${nextStageLabel(currentStatus)}.`,
+        `Moved to ${nextStageLabel(currentStatus)}.`,
       )
     } catch (error) {
       notify(
@@ -139,26 +144,30 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
         'Approval failed',
         error instanceof Error ? error.message : 'Please try again.',
       )
+    } finally {
+      setBusy(false)
     }
   }
 
-  const handleReject = () => {
+  const handleReject = async () => {
     if (!selected) return
     if (rejectReason.trim().length < 4) {
       setRejectError('Please provide a reason for rejecting this nomination.')
       return
     }
+    setBusy(true)
     try {
-      rejectNomination(
-        selected.referenceNumber,
+      await rejectNomination(
+        selected.id,
         role,
         profile.name,
+        profile.email,
         rejectReason.trim(),
       )
       notify(
         'success',
         'Nomination rejected',
-        `${selected.referenceNumber} was returned to the member.`,
+        `${selected.referenceNumber || selected.memberName} was returned to the member.`,
       )
       setRejecting(false)
       setRejectReason('')
@@ -167,6 +176,8 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
       setRejectError(
         error instanceof Error ? error.message : 'Please try again.',
       )
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -178,9 +189,13 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
     notify(
       'info',
       'Nomination form',
-      `${nomination.sourceFileName || 'The nomination form'} is attached to ${
-        nomination.referenceNumber
-      }.`,
+      nomination.sourceFileName
+        ? `${nomination.sourceFileName} is attached to ${
+            nomination.referenceNumber || nomination.memberName
+          }, but its source file URL is unavailable.`
+        : `The source file name is unavailable for ${
+            nomination.referenceNumber || nomination.memberName
+          }.`,
     )
   }
 
@@ -197,10 +212,10 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
         'Submission Date',
       ],
       filtered.map((nomination) => [
-        nomination.referenceNumber,
+        nomination.referenceNumber || nomination.id,
         nomination.memberNumber,
         nomination.memberName,
-        schemeName(schemes, nomination.schemeId),
+        nominationSchemeName(schemes, nomination),
         nomination.nomineeCount,
         nomination.status,
         nomination.submissionDate,
@@ -215,19 +230,8 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
 
   return (
     <div className="page-stack">
-      <section className="hero">
-        <div className="hero-main">
-          <span className="hero-eyebrow">
-            <Icon name="file-text" size={13} />
-            Nomination members
-          </span>
-          <h1 className="hero-title">Beneficiary nominations</h1>
-          <p className="hero-text">
-            Review every nomination submission, open the linked beneficiaries
-            and move records through principal officer and pension manager
-            approval.
-          </p>
-        </div>
+      <header className="page-heading">
+        <h1 className="page-heading-title">Beneficiary nominations</h1>
         <div className="hero-actions">
           <button
             type="button"
@@ -237,84 +241,13 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
             <Icon name="download" size={15} />
             Export
           </button>
-          <button
-            type="button"
-            className="button button-secondary"
-            onClick={() => navigate('/beneficiaries')}
-          >
-            <Icon name="users" size={15} />
-            Beneficiaries
-          </button>
         </div>
-      </section>
-
-      <section className="stat-grid" aria-label="Nomination figures">
-        <article className="stat-card">
-          <div className="stat-top">
-            <span className="stat-icon is-blue">
-              <Icon name="file-text" size={17} />
-            </span>
-            <span className="stat-context">Total</span>
-          </div>
-          <p className="stat-value">{counts.total}</p>
-          <p className="stat-label">Nominations received</p>
-          <p className="stat-hint">
-            <Icon name="layers" size={12} />
-            Across {schemes.length} schemes
-          </p>
-        </article>
-        <article className="stat-card">
-          <div className="stat-top">
-            <span className="stat-icon is-amber">
-              <Icon name="clock" size={17} />
-            </span>
-            <span className="stat-context">Stage 1</span>
-          </div>
-          <p className="stat-value">{counts.pendingPo}</p>
-          <p className="stat-label">Pending PO approval</p>
-          <p className="stat-hint is-warn">
-            <Icon name="alert-circle" size={12} />
-            Awaiting endorsement
-          </p>
-        </article>
-        <article className="stat-card">
-          <div className="stat-top">
-            <span className="stat-icon is-amber">
-              <Icon name="clock" size={17} />
-            </span>
-            <span className="stat-context">Stage 2</span>
-          </div>
-          <p className="stat-value">{counts.pendingPm}</p>
-          <p className="stat-label">Pending PM approval</p>
-          <p className="stat-hint is-warn">
-            <Icon name="alert-circle" size={12} />
-            Awaiting final approval
-          </p>
-        </article>
-        <article className="stat-card">
-          <div className="stat-top">
-            <span className="stat-icon is-green">
-              <Icon name="check-circle" size={17} />
-            </span>
-            <span className="stat-context">Complete</span>
-          </div>
-          <p className="stat-value">{counts.approved}</p>
-          <p className="stat-label">Approved nominations</p>
-          <p className="stat-hint is-up">
-            <Icon name="check" size={12} />
-            Fully approved
-          </p>
-        </article>
-      </section>
+      </header>
 
       <section className="panel">
         <div className="panel-header">
           <div className="panel-heading">
             <h2 className="panel-title">Nomination register</h2>
-            <p className="panel-subtitle">
-              Search by reference, member number or member name. Open a row to
-              review the nomination.
-            </p>
           </div>
         </div>
 
@@ -385,15 +318,13 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                   )
                   return (
                     <tr
-                      key={nomination.referenceNumber}
+                      key={nomination.id}
                       className="is-clickable"
-                      onClick={() =>
-                        openNomination(nomination.referenceNumber)
-                      }
+                      onClick={() => openNomination(nomination.id)}
                     >
                       <td>
                         <span className="cell-strong">
-                          {nomination.referenceNumber}
+                          {nomination.referenceNumber || nomination.id}
                         </span>
                       </td>
                       <td>{nomination.memberNumber}</td>
@@ -412,7 +343,7 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                           </span>
                         </div>
                       </td>
-                      <td>{schemeName(schemes, nomination.schemeId)}</td>
+                      <td>{nominationSchemeName(schemes, nomination)}</td>
                       <td>{nomination.nomineeCount}</td>
                       <td>
                         <NominationStatusBadge status={nomination.status} />
@@ -423,11 +354,13 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                           <button
                             type="button"
                             className="row-button"
-                            aria-label={`View ${nomination.referenceNumber}`}
+                            aria-label={`View ${
+                              nomination.referenceNumber || nomination.id
+                            }`}
                             title="View details"
                             onClick={(event) => {
                               event.stopPropagation()
-                              openNomination(nomination.referenceNumber)
+                              openNomination(nomination.id)
                             }}
                           >
                             <Icon name="eye" size={14} />
@@ -435,7 +368,9 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                           <button
                             type="button"
                             className="row-button"
-                            aria-label={`View form for ${nomination.referenceNumber}`}
+                            aria-label={`View form for ${
+                              nomination.referenceNumber || nomination.id
+                            }`}
                             title="View form"
                             onClick={(event) => {
                               event.stopPropagation()
@@ -449,12 +384,15 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                               <button
                                 type="button"
                                 className="row-button"
-                                aria-label={`Approve ${nomination.referenceNumber}`}
+                                aria-label={`Approve ${
+                                  nomination.referenceNumber || nomination.id
+                                }`}
                                 title="Approve"
+                                disabled={busy}
                                 onClick={(event) => {
                                   event.stopPropagation()
-                                  handleApprove(
-                                    nomination.referenceNumber,
+                                  void handleApprove(
+                                    nomination.id,
                                     nomination.status,
                                   )
                                 }}
@@ -464,11 +402,14 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                               <button
                                 type="button"
                                 className="row-button"
-                                aria-label={`Reject ${nomination.referenceNumber}`}
+                                aria-label={`Reject ${
+                                  nomination.referenceNumber || nomination.id
+                                }`}
                                 title="Reject"
+                                disabled={busy}
                                 onClick={(event) => {
                                   event.stopPropagation()
-                                  openNomination(nomination.referenceNumber)
+                                  openNomination(nomination.id)
                                   setRejecting(true)
                                 }}
                               >
@@ -516,13 +457,15 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
         onClose={closeDrawer}
         eyebrow="Nomination record"
         title={
-          selected ? `Reference ${selected.referenceNumber}` : 'Nomination'
+          selected
+            ? `Reference ${selected.referenceNumber || selected.id}`
+            : 'Nomination'
         }
         subtitle={
           selected
-            ? `${selected.memberName} · ${schemeName(
+            ? `${selected.memberName} · ${nominationSchemeName(
                 schemes,
-                selected.schemeId,
+                selected,
               )}`
             : undefined
         }
@@ -532,6 +475,7 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
               <button
                 type="button"
                 className="button button-secondary"
+                disabled={busy}
                 onClick={() => {
                   setRejecting(false)
                   setRejectReason('')
@@ -547,16 +491,18 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                     <button
                       type="button"
                       className="button button-primary"
+                      disabled={busy}
                       onClick={() =>
-                        handleApprove(selected.referenceNumber, selected.status)
+                        void handleApprove(selected.id, selected.status)
                       }
                     >
                       <Icon name="check" size={14} />
-                      Approve
+                      {busy ? 'Saving…' : 'Approve'}
                     </button>
                     <button
                       type="button"
                       className="button button-danger"
+                      disabled={busy}
                       onClick={() => setRejecting(true)}
                     >
                       <Icon name="x" size={14} />
@@ -583,7 +529,9 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
               <div className="detail-grid">
                 <div className="detail-item">
                   <p className="detail-label">Reference number</p>
-                  <p className="detail-value">{selected.referenceNumber}</p>
+                  <p className="detail-value">
+                    {selected.referenceNumber || '—'}
+                  </p>
                 </div>
                 <div className="detail-item">
                   <p className="detail-label">Member number</p>
@@ -614,10 +562,28 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                 <div className="detail-item">
                   <p className="detail-label">Scheme</p>
                   <p className="detail-value">
-                    {schemeName(schemes, selected.schemeId)}
+                    {nominationSchemeName(schemes, selected)}
+                  </p>
+                </div>
+                <div className="detail-item">
+                  <p className="detail-label">Source status</p>
+                  <p className="detail-value">
+                    {selected.sourceStatus || '—'}
                   </p>
                 </div>
               </div>
+              {selected.warnings ? (
+                <div className="notice" style={{ marginTop: 14 }}>
+                  <Icon
+                    name="alert-circle"
+                    size={14}
+                    className="notice-icon"
+                  />
+                  <span>
+                    <strong>Warnings:</strong> {selected.warnings}
+                  </span>
+                </div>
+              ) : null}
             </section>
 
             <section className="drawer-section">
@@ -716,10 +682,10 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                 </span>
                 <div className="policy-summary-copy">
                   <p className="policy-summary-title">
-                    {selected.sourceFileName}
+                    {selected.sourceFileName || 'Source file name unavailable'}
                   </p>
                   <p className="policy-summary-meta">
-                    Uploaded with the member submission
+                    Source file name from the member submission
                   </p>
                 </div>
                 <button
@@ -760,12 +726,17 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                   <button
                     type="button"
                     className="button button-danger"
-                    onClick={handleReject}
+                    disabled={busy}
+                    onClick={() => void handleReject()}
                   >
                     <Icon name="x" size={14} />
-                    Confirm rejection
+                    {busy ? 'Saving…' : 'Confirm rejection'}
                   </button>
                 </div>
+                <p className="help">
+                  The reason is stored in the nomination’s Warnings field
+                  because SharePoint has no dedicated rejection column.
+                </p>
               </section>
             ) : null}
 

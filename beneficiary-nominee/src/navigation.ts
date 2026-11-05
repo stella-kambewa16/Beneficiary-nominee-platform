@@ -19,7 +19,7 @@ export const navItems: NavItem[] = [
   {
     path: '/',
     label: 'Dashboard',
-    subtitle: 'A simple overview of nomination volume and approval workload.',
+    subtitle: 'System KPIs, recent nominations and activity.',
     icon: 'grid',
     section: 'Workspace',
     roles: allRoles,

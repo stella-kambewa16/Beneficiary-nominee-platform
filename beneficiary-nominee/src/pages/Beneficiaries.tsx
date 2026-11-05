@@ -1,6 +1,5 @@
 import { useRef, useState } from 'react'
 import { useData } from '../data/context'
-import { navigate } from '../router'
 import { Icon } from '../components/Icon'
 import {
   AllocationBar,
@@ -11,20 +10,11 @@ import { useToast } from '../components/toast-context'
 import { useAuth } from '../auth/auth-context'
 import { downloadCsv } from '../lib/export'
 import { formatDate, initials } from '../lib/format'
-import { schemeName } from '../lib/nominations'
+import { schemeName, principalOfficerForScheme } from '../lib/nominations'
 import { scopedBeneficiaries, scopedNominations } from '../lib/scope'
-import type { Relationship } from '../data/types'
+import type { Beneficiary, Relationship } from '../data/types'
 
 type RelationshipFilter = 'All' | Relationship
-
-const relationships: Relationship[] = [
-  'Spouse',
-  'Child',
-  'Parent',
-  'Sibling',
-  'Extended family',
-  'Other',
-]
 
 export function BeneficiariesPage() {
   const { beneficiaries, nominations, schemes, users } = useData()
@@ -57,10 +47,30 @@ export function BeneficiariesPage() {
       nomination,
     ]),
   )
+  const nominationFor = (beneficiary: Beneficiary) => {
+    if (beneficiary.refNumber) {
+      const byReference = nominationByRef.get(beneficiary.refNumber)
+      if (byReference) return byReference
+    }
+    if (beneficiary.memberItemId !== null) {
+      return visibleNominations.find(
+        (nomination) => nomination.id === String(beneficiary.memberItemId),
+      )
+    }
+    return undefined
+  }
   const query = search.trim().toLowerCase()
 
+  const relationshipOptions = Array.from(
+    new Set(
+      visibleBeneficiaries
+        .map((beneficiary) => beneficiary.relationship.trim())
+        .filter(Boolean),
+    ),
+  ).sort((a, b) => a.localeCompare(b))
+
   const filtered = visibleBeneficiaries.filter((beneficiary) => {
-    const nomination = nominationByRef.get(beneficiary.refNumber)
+    const nomination = nominationFor(beneficiary)
     const scheme = nomination
       ? schemes.find((item) => item.id === nomination.schemeId)
       : undefined
@@ -84,25 +94,10 @@ export function BeneficiariesPage() {
 
   const selected =
     visibleBeneficiaries.find((item) => item.id === selectedId) ?? null
-  const selectedNomination = selected
-    ? nominationByRef.get(selected.refNumber)
-    : undefined
+  const selectedNomination = selected ? nominationFor(selected) : undefined
   const selectedScheme = selectedNomination
     ? schemes.find((scheme) => scheme.id === selectedNomination.schemeId)
     : undefined
-
-  const memberCount = new Set(
-    visibleBeneficiaries.map((item) => item.memberNumber),
-  ).size
-  const nominationCount = new Set(
-    visibleBeneficiaries.map((item) => item.refNumber),
-  ).size
-  const averageAllocation = Math.round(
-    visibleBeneficiaries.reduce(
-      (sum, item) => sum + item.benefitRevisedPct,
-      0,
-    ) / Math.max(visibleBeneficiaries.length, 1),
-  )
 
   const focusSearch = () => {
     searchRef.current?.focus()
@@ -128,7 +123,7 @@ export function BeneficiariesPage() {
         'Scheme',
       ],
       filtered.map((beneficiary) => {
-        const nomination = nominationByRef.get(beneficiary.refNumber)
+        const nomination = nominationFor(beneficiary)
         return [
           beneficiary.title,
           beneficiary.relationship,
@@ -150,18 +145,8 @@ export function BeneficiariesPage() {
 
   return (
     <div className="page-stack">
-      <section className="hero">
-        <div className="hero-main">
-          <span className="hero-eyebrow">
-            <Icon name="users" size={13} />
-            Nomination nominees
-          </span>
-          <h1 className="hero-title">Beneficiaries</h1>
-          <p className="hero-text">
-            Every nominated beneficiary across the scheme book, linked back to
-            its nomination reference, member and allocation share.
-          </p>
-        </div>
+      <header className="page-heading">
+        <h1 className="page-heading-title">Beneficiaries</h1>
         <div className="hero-actions">
           <button
             type="button"
@@ -171,91 +156,13 @@ export function BeneficiariesPage() {
             <Icon name="download" size={15} />
             Export
           </button>
-          <button
-            type="button"
-            className="button button-secondary"
-            onClick={focusSearch}
-          >
-            <Icon name="search" size={15} />
-            Search beneficiary
-          </button>
-          <button
-            type="button"
-            className="button button-secondary"
-            onClick={() => navigate('/nominations')}
-          >
-            <Icon name="file-text" size={15} />
-            Nominations
-          </button>
         </div>
-      </section>
-
-      <section className="stat-grid" aria-label="Beneficiary figures">
-        <article className="stat-card">
-          <div className="stat-top">
-            <span className="stat-icon is-blue">
-              <Icon name="users" size={17} />
-            </span>
-            <span className="stat-context">Register</span>
-          </div>
-          <p className="stat-value">{visibleBeneficiaries.length}</p>
-          <p className="stat-label">Total beneficiaries</p>
-          <p className="stat-hint">
-            <Icon name="layers" size={12} />
-            {nominationCount} nominations
-          </p>
-        </article>
-        <article className="stat-card">
-          <div className="stat-top">
-            <span className="stat-icon is-green">
-              <Icon name="user" size={17} />
-            </span>
-            <span className="stat-context">Members</span>
-          </div>
-          <p className="stat-value">{memberCount}</p>
-          <p className="stat-label">Members covered</p>
-          <p className="stat-hint">
-            <Icon name="check-circle" size={12} />
-            One or more nominees each
-          </p>
-        </article>
-        <article className="stat-card">
-          <div className="stat-top">
-            <span className="stat-icon is-green">
-              <Icon name="briefcase" size={17} />
-            </span>
-            <span className="stat-context">Schemes</span>
-          </div>
-          <p className="stat-value">{schemes.length}</p>
-          <p className="stat-label">Schemes represented</p>
-          <p className="stat-hint">
-            <Icon name="shield" size={12} />
-            Active scheme book
-          </p>
-        </article>
-        <article className="stat-card">
-          <div className="stat-top">
-            <span className="stat-icon is-amber">
-              <Icon name="percent" size={17} />
-            </span>
-            <span className="stat-context">Allocation</span>
-          </div>
-          <p className="stat-value">{averageAllocation}%</p>
-          <p className="stat-label">Average allocation</p>
-          <p className="stat-hint">
-            <Icon name="target" size={12} />
-            Across all beneficiaries
-          </p>
-        </article>
-      </section>
+      </header>
 
       <section className="panel">
         <div className="panel-header">
           <div className="panel-heading">
             <h2 className="panel-title">Beneficiary register</h2>
-            <p className="panel-subtitle">
-              Search by beneficiary, member number or reference number.
-            </p>
           </div>
         </div>
 
@@ -281,7 +188,7 @@ export function BeneficiariesPage() {
             aria-label="Filter by relationship"
           >
             <option value="All">All relationships</option>
-            {relationships.map((item) => (
+            {relationshipOptions.map((item) => (
               <option key={item} value={item}>
                 {item}
               </option>
@@ -310,9 +217,7 @@ export function BeneficiariesPage() {
               </thead>
               <tbody>
                 {filtered.map((beneficiary) => {
-                  const nomination = nominationByRef.get(
-                    beneficiary.refNumber,
-                  )
+                  const nomination = nominationFor(beneficiary)
                   return (
                     <tr
                       key={beneficiary.id}
@@ -525,7 +430,9 @@ export function BeneficiariesPage() {
                 <Icon name="info" size={14} className="notice-icon" />
                 <span>
                   {selectedScheme.name} is managed by{' '}
-                  {selectedScheme.description}
+                  {principalOfficerForScheme(users, selectedScheme.id)?.name ??
+                    'an unassigned Principal Officer'}
+                  .
                 </span>
               </div>
             ) : null}

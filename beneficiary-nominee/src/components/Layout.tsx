@@ -2,15 +2,13 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Icon } from './Icon'
 import { RoleMenu } from './RoleMenu'
-import { useToast } from './toast-context'
 import { useAuth } from '../auth/auth-context'
+import { useData } from '../data/context'
 import {
-  findNavItem,
   navItemsForRole,
   navSections,
 } from '../navigation'
 import type { RouteState } from '../router'
-import { todayLabel } from '../lib/format'
 
 const COLLAPSE_KEY = 'mfs-sidebar-collapsed'
 
@@ -29,8 +27,8 @@ export function Layout({
   route: RouteState
   children: ReactNode
 }) {
-  const { notify } = useToast()
   const { role, profile } = useAuth()
+  const { loading, refreshing, error, refresh } = useData()
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const [mobileOpen, setMobileOpen] = useState(false)
   const visibleNav = navItemsForRole(role)
@@ -43,18 +41,33 @@ export function Layout({
     }
   }, [collapsed])
 
-  const current = findNavItem(route.path)
-  const title = current?.label ?? 'Beneficiary nomination'
-  const subtitle =
-    current?.subtitle ?? 'Manage beneficiary nominations with confidence.'
-
-  const handleSignOut = () => {
-    notify(
-      'info',
-      'Demo workspace',
-      'Sign-out is disabled because this build is front-end only.',
-    )
-  }
+  const dataStatus = error ? (
+    <div className="notice is-danger data-banner" role="alert">
+      <Icon name="alert-circle" size={14} className="notice-icon" />
+      <span className="data-banner-text">{error}</span>
+      <button
+        type="button"
+        className="button button-secondary button-small data-banner-action"
+        onClick={() => void refresh()}
+        disabled={refreshing}
+      >
+        {refreshing ? 'Retrying…' : 'Retry'}
+      </button>
+    </div>
+  ) : loading ? (
+    <div className="notice is-info data-banner" role="status">
+      <Icon name="refresh" size={14} className="notice-icon" />
+      <span className="data-banner-text">
+        Loading schemes, principal officers, nominations and nominees from
+        SharePoint…
+      </span>
+    </div>
+  ) : refreshing ? (
+    <div className="notice is-info data-banner" role="status">
+      <Icon name="refresh" size={14} className="notice-icon" />
+      <span className="data-banner-text">Refreshing SharePoint data…</span>
+    </div>
+  ) : null
 
   return (
     <div className="app-shell">
@@ -75,8 +88,7 @@ export function Layout({
             <Icon name="shield" size={21} />
           </span>
           <div className="brand-copy">
-            <span className="brand-name">Mthunzi</span>
-            <span className="brand-sub">Beneficiary Nomination</span>
+            <span className="brand-name">Beneficiary Nominee</span>
           </div>
           <button
             type="button"
@@ -150,15 +162,6 @@ export function Layout({
               <span className="user-role">{profile.title}</span>
             </span>
           </div>
-          <button
-            type="button"
-            className="signout"
-            onClick={handleSignOut}
-            title="Sign out"
-          >
-            <Icon name="log-out" size={15} />
-            <span className="signout-label">Sign out</span>
-          </button>
         </div>
       </aside>
 
@@ -174,21 +177,18 @@ export function Layout({
           </button>
 
           <div className="topbar-heading">
-            <span className="topbar-title">{title}</span>
-            <span className="topbar-subtitle">{subtitle}</span>
+            <span className="topbar-title">Hello, {profile.name}</span>
           </div>
 
           <div className="topbar-actions">
-            <span className="date-chip">
-              <Icon name="calendar" size={13} />
-              {todayLabel()}
-            </span>
-            <span className="topbar-divider" aria-hidden="true" />
             <RoleMenu />
           </div>
         </header>
 
-        <main className="content">{children}</main>
+        <main className="content">
+          {dataStatus}
+          {children}
+        </main>
       </div>
     </div>
   )
