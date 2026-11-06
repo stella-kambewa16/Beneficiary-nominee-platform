@@ -36,7 +36,7 @@ import type {
   UserStatus,
 } from './types'
 import { appendComment } from '../lib/comments'
-import { applyEvaluation } from '../lib/validation'
+import { applyRecordedErrors } from '../lib/validation'
 
 /* -------------------------------------------------------------------------- */
 /* Field helpers                                                              */
@@ -136,22 +136,6 @@ export function normalizeEndorsementStatus(
   if (PA.test(raw)) return 'Pending PA'
   if (PO.test(raw)) return 'Pending PO'
   return 'Tasks'
-}
-
-export function normalizeErrorStatus(
-  value: string | undefined,
-): NominationErrorStatus | null {
-  const raw = text(value).toLowerCase()
-  if (!raw) return null
-  if (raw.includes('scheme')) return 'Missing Scheme'
-  if (raw.includes('principal') || raw.includes('officer')) {
-    return 'Missing Principal Officer'
-  }
-  if (raw.includes('information') || raw.includes('missing')) {
-    return 'Missing Information'
-  }
-  if (raw.includes('clear')) return 'Clear'
-  return null
 }
 
 export function normalizeUserStatus(value: string | undefined): UserStatus {
@@ -307,9 +291,11 @@ function buildApprovalHistory(
 export function mapNomination(
   record: NominationRecord,
   schemes: Scheme[],
-  users: SystemUser[],
-  beneficiaries: Beneficiary[],
+  _users: SystemUser[],
+  _beneficiaries: Beneficiary[],
 ): Nomination {
+  void _users
+  void _beneficiaries
   const fundName = text(record.FundName)
   const scheme = findSchemeByLabel(schemes, fundName)
   const sourceStatus = text(record.endorseStatus)
@@ -337,9 +323,8 @@ export function mapNomination(
     submissionDate,
     status,
     sourceStatus,
-    errorStatus: 'Clear',
+    errorStatus: null,
     sourceErrors: text(record.Errors),
-    errorFindings: [],
     comments: text(record.Comments),
     warnings: text(record.Warnings),
     sourceFileName: text(record.SourceFileName),
@@ -358,7 +343,7 @@ export function mapNomination(
     modifiedDate: dateOnly(modified),
   }
 
-  return applyEvaluation(mapped, schemes, users, beneficiaries)
+  return applyRecordedErrors(mapped)
 }
 
 export function mapBeneficiary(record: NominationNomineesRead): Beneficiary {
@@ -586,7 +571,7 @@ export interface NominationDecision {
   actorRole: UserRole
   comment: string
   previousComments: string
-  errors: NominationErrorStatus
+  errors: NominationErrorStatus | null
   secondEndorser?: { name: string; email: string }
 }
 
@@ -596,7 +581,6 @@ export async function writeNominationDecision(
 ): Promise<NominationRecord> {
   const changed: NominationWriteRecord = {
     endorseStatus: statusWriteValue(decision.status),
-    Errors: decision.errors,
     Comments: appendComment(
       decision.previousComments,
       decision.actor,
@@ -604,6 +588,8 @@ export async function writeNominationDecision(
       decision.comment,
     ),
   }
+
+  if (decision.errors) changed.Errors = decision.errors
 
   if (decision.stage === 'PO') {
     changed.OData__x0031_stEndorseName = decision.actor

@@ -57,13 +57,6 @@ export function isTaskNomination(nomination: Nomination): boolean {
   )
 }
 
-export function isEndorsementNomination(nomination: Nomination): boolean {
-  if (nomination.status === 'Approved' || nomination.status === 'Rejected') {
-    return true
-  }
-  return isPendingStatus(nomination.status) && nomination.errorStatus === 'Clear'
-}
-
 export function principalOfficerName(
   users: SystemUser[],
   schemeId: string,

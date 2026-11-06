@@ -19,6 +19,12 @@ export function appendComment(
   return current ? `${current}\n${entry}` : entry
 }
 
+export function appendSystemComment(existing: string, message: string): string {
+  const entry = `[${formatDateTime(new Date().toISOString())}] Workflow automation: ${message.trim()}`
+  const current = existing.trim()
+  return current ? `${current}\n${entry}` : entry
+}
+
 export function commentLines(value: string): string[] {
   return value
     .split(/\r?\n/)

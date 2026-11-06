@@ -42,14 +42,14 @@ const reports: ReportDefinition[] = [
     id: 'validation-summary',
     title: 'Validation Summary',
     description:
-      'Data-quality view of open tasks by Errors status and most common finding.',
+      'Open Tasks grouped by the status stored in the Errors column.',
     icon: 'alert-circle',
   },
   {
     id: 'validation-tasks',
     title: 'Validation Tasks',
     description:
-      'Nominations still in Tasks with their current Errors status and findings.',
+      'Nominations still in Tasks with their current Errors status and comments.',
     icon: 'file-check',
   },
   {
@@ -115,11 +115,6 @@ function ageInDays(value: string): number {
     0,
     Math.floor((Date.now() - created.getTime()) / 86_400_000),
   )
-}
-
-function findingCategory(finding: string): string {
-  const separator = finding.indexOf(': ')
-  return separator >= 0 ? finding.slice(separator + 2) : finding
 }
 
 export function ReportsPage() {
@@ -227,33 +222,18 @@ export function ReportsPage() {
 
       case 'validation-summary': {
         const taskItems = filteredNominations.filter(isTaskNomination)
-        const rows = nominationErrorStatuses.map((errorStatus) => {
+        const rows = [...nominationErrorStatuses, null].map((errorStatus) => {
           const items = taskItems.filter(
             (nomination) => nomination.errorStatus === errorStatus,
           )
-          const findingCounts = new Map<string, number>()
-          items.forEach((nomination) => {
-            nomination.errorFindings.forEach((finding) => {
-              const category = findingCategory(finding)
-              findingCounts.set(
-                category,
-                (findingCounts.get(category) ?? 0) + 1,
-              )
-            })
-          })
-          const topFinding = [...findingCounts.entries()].sort(
-            (a, b) => b[1] - a[1],
-          )[0]
           const oldest = items.reduce(
             (max, nomination) =>
               Math.max(max, ageInDays(nomination.submissionDate)),
             0,
           )
           return [
-            errorStatus,
+            errorStatus ?? 'Not set',
             items.length,
-            topFinding?.[0] ?? '—',
-            topFinding?.[1] ?? 0,
             oldest,
           ]
         })
@@ -261,8 +241,6 @@ export function ReportsPage() {
           headers: [
             'Errors',
             'Nominations',
-            'Most Common Finding',
-            'Count',
             'Oldest (days)',
           ],
           rows,
@@ -278,8 +256,8 @@ export function ReportsPage() {
             nomination.memberNumber,
             nomination.memberName,
             schemeName(schemes, nomination.schemeId),
-            nomination.errorStatus,
-            nomination.errorFindings.join(' '),
+            nomination.errorStatus ?? 'Not set',
+            nomination.comments || '—',
             formatDate(nomination.submissionDate),
             nomination.endorsement1Name || '—',
           ])
@@ -290,7 +268,7 @@ export function ReportsPage() {
             'Member Name',
             'Scheme',
             'Errors',
-            'Validation Findings',
+            'Comments',
             'Submission Date',
             'First Endorser',
           ],
@@ -313,7 +291,7 @@ export function ReportsPage() {
             nomination.memberName,
             schemeName(schemes, nomination.schemeId),
             nomination.status,
-            nomination.errorStatus,
+            nomination.errorStatus ?? 'Not set',
             nomination.endorsement1Name || '—',
             nomination.endorsement2Name || '—',
             formatDate(nomination.submissionDate),

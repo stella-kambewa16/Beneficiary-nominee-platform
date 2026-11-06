@@ -33,7 +33,7 @@ export function NominationStatusBadge({
 export function ErrorStatusBadge({
   status,
 }: {
-  status: NominationErrorStatus
+  status: NominationErrorStatus | null
 }) {
   const tone =
     status === 'Clear'
@@ -42,12 +42,14 @@ export function ErrorStatusBadge({
         ? 'red'
         : status === 'Missing Principal Officer'
           ? 'blue'
-          : 'amber'
+          : status === 'Missing Information'
+            ? 'amber'
+            : 'slate'
 
   return (
     <span className={`badge badge-${tone}`}>
       <span className="badge-dot" />
-      {status}
+      {status ?? 'Not set'}
     </span>
   )
 }

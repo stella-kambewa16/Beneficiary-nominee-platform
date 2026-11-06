@@ -17,15 +17,12 @@ import { formatDate, initials } from '../lib/format'
 import { commentLines } from '../lib/comments'
 import {
   canActOnNomination,
-  isEndorsementNomination,
   isTaskNomination,
   nextStageLabel,
   nominationSchemeName,
 } from '../lib/nominations'
 import { scopedBeneficiaries, scopedNominations } from '../lib/scope'
 import type { Nomination, NominationStatus } from '../data/types'
-
-type StatusFilter = 'All' | NominationStatus
 
 function getSourceFileUrl(value: string): string {
   const sourceText =
@@ -61,7 +58,6 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
   const { role, profile } = useAuth()
 
   const [search, setSearch] = useState('')
-  const [status, setStatus] = useState<StatusFilter>('All')
   const [schemeId, setSchemeId] = useState('All')
   const [selectedId, setSelectedId] = useState<string | null>(() => {
     const fromQuery = route.query.get('nomination')
@@ -98,8 +94,16 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
     users,
   )
 
-  const endorsementNominations = visibleNominations.filter(
-    isEndorsementNomination,
+  const queueStatus =
+    route.path === '/pending-po'
+      ? 'Pending PO'
+      : route.path === '/pending-pa'
+        ? 'Pending PA'
+        : null
+  const endorsementNominations = visibleNominations.filter((nomination) =>
+    queueStatus
+      ? nomination.status === queueStatus && nomination.errorStatus === 'Clear'
+      : nomination.status === 'Approved',
   )
 
   const query = search.trim().toLowerCase()
@@ -118,10 +122,9 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
         .join(' ')
         .toLowerCase()
         .includes(query)
-    const matchesStatus = status === 'All' || nomination.status === status
     const matchesScheme =
       schemeId === 'All' || nomination.schemeId === schemeId
-    return matchesSearch && matchesStatus && matchesScheme
+    return matchesSearch && matchesScheme
   })
 
   const selected =
@@ -198,7 +201,7 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
       notify(
         'error',
         'Validation required',
-        `This nomination cannot be endorsed while Errors is "${target.errorStatus}". Clear the findings in Tasks first.`,
+        `This nomination cannot be endorsed while the SharePoint Errors column is "${target.errorStatus ?? 'Not set'}". Update its Errors status in Tasks first.`,
       )
       return
     }
@@ -302,7 +305,7 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
         nominationSchemeName(schemes, nomination),
         nomination.nomineeCount,
         nomination.status,
-        nomination.errorStatus,
+        nomination.errorStatus ?? 'Not set',
         nomination.endorsement1Name,
         nomination.endorsement2Name,
         nomination.comments,
@@ -319,7 +322,13 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
   return (
     <div className="page-stack">
       <header className="page-heading">
-        <h1 className="page-heading-title">Beneficiary nominations</h1>
+        <h1 className="page-heading-title">
+          {queueStatus === 'Pending PO'
+            ? 'Pending Principal Officer endorsement'
+            : queueStatus === 'Pending PA'
+              ? 'Pending Pension Administrator endorsement'
+              : 'Active Members'}
+        </h1>
         <div className="hero-actions">
           <button
             type="button"
@@ -335,7 +344,9 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
       <section className="panel">
         <div className="panel-header">
           <div className="panel-heading">
-            <h2 className="panel-title">Nomination register</h2>
+            <h2 className="panel-title">
+              {queueStatus ? `${queueStatus} queue` : 'Approved nominations'}
+            </h2>
           </div>
         </div>
 
@@ -364,21 +375,10 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
               </option>
             ))}
           </select>
-          <select
-            className="filter-select"
-            value={status}
-            onChange={(event) => setStatus(event.target.value as StatusFilter)}
-            aria-label="Filter by status"
-          >
-            <option value="All">All statuses</option>
-            <option value="Pending PO">Pending PO</option>
-            <option value="Pending PA">Pending PA</option>
-            <option value="Approved">Approved</option>
-            <option value="Rejected">Rejected</option>
-          </select>
           <div className="toolbar-actions">
             <span className="result-count">
-              {filtered.length} of {endorsementNominations.length} nominations
+              {filtered.length} of {endorsementNominations.length}{' '}
+              {queueStatus ? 'pending nominations' : 'active members'}
             </span>
           </div>
         </div>
@@ -538,7 +538,7 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
             </span>
             <p className="empty-title">No nominations match your filters</p>
             <p className="empty-text">
-              Adjust the search term, scheme or status filter to see the full
+              Adjust the search term or scheme filter to see the full
               nomination register.
             </p>
             <div className="empty-actions">
@@ -547,7 +547,6 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                 className="button button-secondary button-small"
                 onClick={() => {
                   setSearch('')
-                  setStatus('All')
                   setSchemeId('All')
                 }}
               >
@@ -708,33 +707,13 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                   </p>
                 </div>
               </div>
-              {selected.errorFindings.length ? (
-                <div className="notice is-danger" style={{ marginTop: 14 }}>
-                  <Icon
-                    name="alert-circle"
-                    size={14}
-                    className="notice-icon"
-                  />
-                  <span>
-                    <strong>{selected.errorStatus}</strong>
-                    {selected.errorFindings.map((finding) => (
-                      <span key={finding} style={{ display: 'block' }}>
-                        • {finding}
-                      </span>
-                    ))}
-                  </span>
-                </div>
-              ) : (
-                <div className="notice is-success" style={{ marginTop: 14 }}>
-                  <Icon
-                    name="check-circle"
-                    size={14}
-                    className="notice-icon"
-                  />
-                  <span>Errors is Clear. This nomination is eligible for
-                    endorsement.</span>
-                </div>
-              )}
+              <div className="notice is-info" style={{ marginTop: 14 }}>
+                <Icon name="info" size={14} className="notice-icon" />
+                <span>
+                  Errors status is read directly from the SharePoint Errors
+                  column: {selected.errorStatus ?? 'Not set'}.
+                </span>
+              </div>
               {selected.warnings ? (
                 <div className="notice" style={{ marginTop: 14 }}>
                   <Icon
@@ -948,8 +927,9 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                 <Icon name="info" size={14} className="notice-icon" />
                 <span>
                   This nomination is still in Tasks with Errors ={' '}
-                  <strong>{selected.errorStatus}</strong>. Correct the findings
-                  before it can be endorsed.{' '}
+                  <strong>{selected.errorStatus ?? 'Not set'}</strong>. Update
+                  the SharePoint Errors value after review before it can be
+                  endorsed.{' '}
                   <button
                     type="button"
                     className="button button-secondary button-small"

@@ -5,6 +5,7 @@ import { ToastProvider } from './components/Toast'
 import { AuthProvider } from './auth/AuthProvider'
 import { useAuth } from './auth/auth-context'
 import { DataProvider } from './data/store'
+import { useData } from './data/context'
 import { findNavItem } from './navigation'
 import { navigate, useRoute } from './router'
 import type { RouteState } from './router'
@@ -28,6 +29,8 @@ function CurrentPage({ route }: { route: RouteState }) {
   switch (route.path) {
     case '/tasks':
       return <TasksPage />
+    case '/pending-po':
+    case '/pending-pa':
     case '/nominations':
       return <BeneficiaryNominationsPage route={route} />
     case '/beneficiaries':
@@ -47,8 +50,11 @@ function CurrentPage({ route }: { route: RouteState }) {
 function Shell() {
   const route = useRoute()
   const { role } = useAuth()
+  const { demoMode } = useData()
   const navItem = findNavItem(route.path)
-  const allowed = !navItem || navItem.roles.includes(role)
+  const allowed =
+    (!demoMode || (route.path !== '/users' && route.path !== '/schemes')) &&
+    (!navItem || navItem.roles.includes(role))
 
   useEffect(() => {
     window.scrollTo({ top: 0 })

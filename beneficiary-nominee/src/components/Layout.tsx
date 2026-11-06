@@ -25,11 +25,50 @@ export function Layout({ route, children }: {
   children: ReactNode
 }) {
   const { role, profile } = useAuth()
-  const { loading, refreshing, error, refresh, nominations } = useData()
+  const {
+    loading,
+    refreshing,
+    error,
+    refresh,
+    nominations,
+    beneficiaries,
+    demoMode,
+  } = useData()
   const taskCount = nominations.filter(isTaskNomination).length
+  const activeNominations = nominations.filter(
+    (nomination) => nomination.status === 'Approved',
+  )
+  const activeReferences = new Set(
+    activeNominations.map((nomination) => nomination.referenceNumber),
+  )
+  const activeIds = new Set(activeNominations.map((nomination) => nomination.id))
+  const navCounts: Record<string, number> = {
+    '/tasks': taskCount,
+    '/pending-po': nominations.filter(
+      (nomination) =>
+        nomination.status === 'Pending PO' &&
+        nomination.errorStatus === 'Clear',
+    ).length,
+    '/pending-pa': nominations.filter(
+      (nomination) =>
+        nomination.status === 'Pending PA' &&
+        nomination.errorStatus === 'Clear',
+    ).length,
+    '/nominations': activeNominations.length,
+    '/beneficiaries': beneficiaries.filter(
+      (beneficiary) =>
+        (beneficiary.refNumber !== '' &&
+          activeReferences.has(beneficiary.refNumber)) ||
+        (beneficiary.memberItemId !== null &&
+          activeIds.has(String(beneficiary.memberItemId))),
+    ).length,
+  }
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const [now, setNow] = useState(() => new Date())
-  const visibleNav = navItemsForRole(role)
+  const visibleNav = navItemsForRole(role).filter(
+    (item) =>
+      !demoMode || (item.path !== '/users' && item.path !== '/schemes'),
+  )
   const isDashboard = route.path === '/'
 
   useEffect(() => {
@@ -136,8 +175,10 @@ export function Layout({ route, children }: {
                     >
                       <Icon name={item.icon} size={18} className="nav-icon" />
                       <span className="nav-text">{item.label}</span>
-                      {item.path === '/tasks' && taskCount > 0 ? (
-                        <span className="nav-count">{taskCount}</span>
+                      {navCounts[item.path] > 0 ? (
+                        <span className="nav-count">
+                          {navCounts[item.path]}
+                        </span>
                       ) : null}
                       {active ? (
                         <Icon
@@ -169,6 +210,15 @@ export function Layout({ route, children }: {
 
       <div className="main-column">
         <main className="content">
+          {demoMode ? (
+            <div className="notice is-info data-banner" role="status">
+              <Icon name="info" size={14} className="notice-icon" />
+              <span className="data-banner-text">
+                Demo seed data — workflow changes stay in this browser and are
+                not saved to SharePoint.
+              </span>
+            </div>
+          ) : null}
           {isDashboard ? (
             <section className="welcome-container" aria-label="Welcome">
               <div className="welcome-copy">

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { DataContext } from './context'
+import { demoSnapshot } from './demo'
 import {
   assignOfficerScheme,
   createOfficerRecord,
@@ -37,12 +38,12 @@ import type {
   UserStatus,
 } from './types'
 import { pensionAdministrator } from '../auth/roles'
-import { appendComment } from '../lib/comments'
+import { appendComment, appendSystemComment } from '../lib/comments'
 import { nowIso } from '../lib/format'
 import {
   activePrincipalOfficerForScheme,
-  applyEvaluation,
-  evaluateNominationErrors,
+  applyRecordedErrors,
+  isReadyForPrincipalOfficer,
 } from '../lib/validation'
 
 interface Snapshot {
@@ -126,7 +127,9 @@ function stageMessage(role: UserRole, status: NominationStatus): string {
     : 'This nomination is awaiting Pension Administrator approval.'
 }
 
-function requireClear(nomination: Nomination): void {
+function requireClear(
+  nomination: Nomination,
+): asserts nomination is Nomination & { errorStatus: 'Clear' } {
   if (nomination.errorStatus !== 'Clear') {
     throw new Error(
       `This nomination cannot be endorsed while its Errors status is "${nomination.errorStatus}". Clear the validation issues in Tasks first.`,
@@ -134,25 +137,70 @@ function requireClear(nomination: Nomination): void {
   }
 }
 
-function validationComment(
-  evaluation: { status: NominationErrorStatus; findings: string[] },
-): string {
-  if (evaluation.status === 'Clear') {
-    return 'Validation passed; Errors set to Clear.'
+function withDemoDecision(
+  nomination: Nomination,
+  status: NominationStatus,
+  stage: DecisionStage,
+  actor: string,
+  actorEmail: string,
+  role: UserRole,
+  comment: string,
+): Nomination {
+  const timestamp = nowIso()
+  const next = {
+    ...nomination,
+    status,
+    sourceStatus: status,
+    comments: appendComment(nomination.comments, actor, role, comment),
+    approvalHistory: [
+      ...nomination.approvalHistory,
+      {
+        id: `DEMO-EVENT-${Date.now()}`,
+        stage: stage === 'PO' ? 'Principal Officer' : 'Pension Administrator',
+        actor,
+        decision: stage === 'PO' ? 'Endorsed' as const : 'Approved' as const,
+        date: timestamp.slice(0, 10),
+        comments: comment,
+      },
+    ],
+    modifiedDate: timestamp.slice(0, 10),
   }
-  return `Validation failed (${evaluation.status}): ${evaluation.findings.join(
-    ' ',
-  )}`
+  return stage === 'PO'
+    ? {
+        ...next,
+        endorsement1Name: actor,
+        endorsement1Email: actorEmail,
+        ...(status === 'Pending PA'
+          ? {
+              endorsement2Name: pensionAdministrator().name,
+              endorsement2Email: pensionAdministrator().email,
+            }
+          : {}),
+      }
+    : {
+        ...next,
+        endorsement2Name: actor,
+        endorsement2Email: actorEmail,
+      }
 }
 
 export function DataProvider({ children }: { children: ReactNode }) {
-  const [snapshot, setSnapshot] = useState<Snapshot>(EMPTY_SNAPSHOT)
+  const demoMode = new URLSearchParams(
+    window.location.hash.split('?')[1] ?? '',
+  ).get('demo') === 'seed'
+  const [snapshot, setSnapshot] = useState<Snapshot>(
+    demoMode ? demoSnapshot : EMPTY_SNAPSHOT,
+  )
   const [sessionActivity, setSessionActivity] = useState<ActivityItem[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!demoMode)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const loadInFlight = useRef(false)
 
   const load = useCallback(async (mode: 'initial' | 'refresh') => {
+    if (demoMode) return
+    if (loadInFlight.current) return
+    loadInFlight.current = true
     if (mode === 'refresh') {
       setRefreshing(true)
     }
@@ -164,32 +212,81 @@ export function DataProvider({ children }: { children: ReactNode }) {
         mapUser(record, schemes),
       )
       const beneficiaries = raw.nomineeRecords.map(mapBeneficiary)
-      const nominations = raw.nominationRecords.map((record) =>
+      let nominations = raw.nominationRecords.map((record) =>
         mapNomination(record, schemes, users, beneficiaries),
       )
 
+      const promotionFailures: string[] = []
+      for (const nomination of nominations) {
+        if (!isReadyForPrincipalOfficer(nomination)) continue
+
+        const officer = activePrincipalOfficerForScheme(users, nomination.schemeId)
+        if (!officer) continue
+
+        try {
+          const updated = await writeNominationValidation(nomination.id, {
+            status: 'Pending PO',
+            errors: 'Clear',
+            comments: appendSystemComment(
+              nomination.comments,
+              `Validation passed. Moved to Pending PO and assigned ${officer.name} as First Endorser.`,
+            ),
+            firstEndorser: { name: officer.name, email: officer.email },
+          })
+          const mapped = mapNomination(updated, schemes, users, beneficiaries)
+          nominations = nominations.map((item) =>
+            item.id === mapped.id ? mapped : item,
+          )
+        } catch (promotionError) {
+          promotionFailures.push(
+            `${nomination.referenceNumber || `Nomination ${nomination.id}`}: ${
+              promotionError instanceof Error
+                ? promotionError.message
+                : 'automatic promotion failed'
+            }`,
+          )
+        }
+      }
+
       setSnapshot({ schemes, users, nominations, beneficiaries })
-      setError(null)
+      setError(
+        promotionFailures.length
+          ? `SharePoint data loaded, but automatic promotion failed for ${promotionFailures.join('; ')}.`
+          : null,
+      )
     } catch (loadError) {
       setError(describeLoadError(loadError))
     } finally {
+      loadInFlight.current = false
       if (mode === 'initial') {
         setLoading(false)
       } else {
         setRefreshing(false)
       }
     }
-  }, [])
+  }, [demoMode])
 
   useEffect(() => {
+    if (demoMode) return
     // Defer the initial read so the provider mounts before state updates.
     const timer = window.setTimeout(() => {
       void load('initial')
     }, 0)
-    return () => window.clearTimeout(timer)
-  }, [load])
+    const refreshTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void load('refresh')
+      }
+    }, 60_000)
+    return () => {
+      window.clearTimeout(timer)
+      window.clearInterval(refreshTimer)
+    }
+  }, [demoMode, load])
 
-  const refresh = useCallback(() => load('refresh'), [load])
+  const refresh = useCallback(
+    () => (demoMode ? Promise.resolve() : load('refresh')),
+    [demoMode, load],
+  )
 
   const pushActivity = useCallback(
     (entry: Omit<ActivityItem, 'id' | 'time'>) => {
@@ -259,23 +356,33 @@ export function DataProvider({ children }: { children: ReactNode }) {
           ? 'Endorsed and forwarded to the Pension Administrator.'
           : 'Final approval granted.')
 
-      const updated = await writeNominationDecision(nomination.id, {
-        status: nextStatus,
-        stage,
-        actor,
-        actorEmail,
-        actorRole: role,
-        comment,
-        previousComments: nomination.comments,
-        errors: nomination.errorStatus,
-        secondEndorser: stage === 'PO' ? pensionAdministrator() : undefined,
-      })
-      const mapped = mapNomination(
-        updated,
-        snapshot.schemes,
-        snapshot.users,
-        snapshot.beneficiaries,
-      )
+      const mapped = demoMode
+        ? withDemoDecision(
+            nomination,
+            nextStatus,
+            stage,
+            actor,
+            actorEmail,
+            role,
+            comment,
+          )
+        : mapNomination(
+            await writeNominationDecision(nomination.id, {
+              status: nextStatus,
+              stage,
+              actor,
+              actorEmail,
+              actorRole: role,
+              comment,
+              previousComments: nomination.comments,
+              errors: nomination.errorStatus,
+              secondEndorser:
+                stage === 'PO' ? pensionAdministrator() : undefined,
+            }),
+            snapshot.schemes,
+            snapshot.users,
+            snapshot.beneficiaries,
+          )
 
       setSnapshot((current) => ({
         ...current,
@@ -303,6 +410,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       snapshot.nominations,
       snapshot.schemes,
       snapshot.users,
+      demoMode,
       pushActivity,
     ],
   )
@@ -330,22 +438,31 @@ export function DataProvider({ children }: { children: ReactNode }) {
         throw new Error(stageMessage(role, nomination.status))
       }
 
-      const updated = await writeNominationDecision(nomination.id, {
-        status: 'Rejected',
-        stage,
-        actor,
-        actorEmail,
-        actorRole: role,
-        comment: reason.trim(),
-        previousComments: nomination.comments,
-        errors: nomination.errorStatus,
-      })
-      const mapped = mapNomination(
-        updated,
-        snapshot.schemes,
-        snapshot.users,
-        snapshot.beneficiaries,
-      )
+      const mapped = demoMode
+        ? withDemoDecision(
+            nomination,
+            'Rejected',
+            stage,
+            actor,
+            actorEmail,
+            role,
+            reason.trim(),
+          )
+        : mapNomination(
+            await writeNominationDecision(nomination.id, {
+              status: 'Rejected',
+              stage,
+              actor,
+              actorEmail,
+              actorRole: role,
+              comment: reason.trim(),
+              previousComments: nomination.comments,
+              errors: nomination.errorStatus,
+            }),
+            snapshot.schemes,
+            snapshot.users,
+            snapshot.beneficiaries,
+          )
 
       setSnapshot((current) => ({
         ...current,
@@ -370,6 +487,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       snapshot.nominations,
       snapshot.schemes,
       snapshot.users,
+      demoMode,
       pushActivity,
     ],
   )
@@ -377,9 +495,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const validateNomination = useCallback(
     async (
       nominationId: string,
+      errors: NominationErrorStatus,
       role: UserRole,
       actor: string,
-    ): Promise<{ status: NominationErrorStatus; findings: string[] }> => {
+    ): Promise<NominationErrorStatus> => {
       const nomination = snapshot.nominations.find(
         (item) => item.id === nominationId,
       )
@@ -387,17 +506,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
         throw new Error('The selected nomination could not be found.')
       }
 
-      const evaluation = evaluateNominationErrors({
-        nomination,
-        beneficiaries: snapshot.beneficiaries,
-        schemes: snapshot.schemes,
-        users: snapshot.users,
-      })
-
       let nextStatus: NominationStatus = nomination.status
       let firstEndorser: { name: string; email: string } | undefined
 
-      if (evaluation.status !== 'Clear') {
+      if (errors !== 'Clear') {
         if (nomination.status === 'Pending PO' || nomination.status === 'Pending PA') {
           nextStatus = 'Tasks'
         }
@@ -421,27 +533,41 @@ export function DataProvider({ children }: { children: ReactNode }) {
       }
 
       const promoted = nextStatus === 'Pending PO' && nomination.status !== 'Pending PO'
-      const message =
-        evaluation.status === 'Clear'
-          ? promoted
-            ? `Validation passed. Moved to Pending PO and assigned ${
-                firstEndorser?.name ?? 'the Principal Officer'
-              } as First Endorser.`
-            : 'Validation re-run; all checks passed.'
-          : validationComment(evaluation)
+      const message = errors === 'Clear'
+        ? promoted
+          ? `Errors column set to Clear. Moved to Pending PO and assigned ${
+              firstEndorser?.name ?? 'the Principal Officer'
+            } as First Endorser.`
+          : 'Errors column updated to Clear.'
+        : `Errors column updated to "${errors}". The nomination remains in Tasks.`
 
-      const updated = await writeNominationValidation(nomination.id, {
-        status: nextStatus,
-        errors: evaluation.status,
-        comments: appendComment(nomination.comments, actor, role, message),
-        firstEndorser,
-      })
-      const mapped = mapNomination(
-        updated,
-        snapshot.schemes,
-        snapshot.users,
-        snapshot.beneficiaries,
-      )
+      const comments = appendComment(nomination.comments, actor, role, message)
+      const mapped = demoMode
+        ? {
+            ...nomination,
+            status: nextStatus,
+            sourceStatus: nextStatus,
+            sourceErrors: errors,
+            errorStatus: errors,
+            comments,
+            ...(firstEndorser
+              ? {
+                  endorsement1Name: firstEndorser.name,
+                  endorsement1Email: firstEndorser.email,
+                }
+              : {}),
+          }
+        : mapNomination(
+            await writeNominationValidation(nomination.id, {
+              status: nextStatus,
+              errors,
+              comments,
+              firstEndorser,
+            }),
+            snapshot.schemes,
+            snapshot.users,
+            snapshot.beneficiaries,
+          )
 
       setSnapshot((current) => ({
         ...current,
@@ -451,10 +577,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       }))
 
       pushActivity({
-        action:
-          evaluation.status === 'Clear'
-            ? 'Validation cleared'
-            : 'Nomination returned to Tasks',
+        action: errors === 'Clear' ? 'Errors cleared' : 'Errors status updated',
         subject: nomination.memberName,
         detail: `${
           nomination.referenceNumber || `Nomination ${nomination.id}`
@@ -464,13 +587,65 @@ export function DataProvider({ children }: { children: ReactNode }) {
         nominationId: nomination.id,
       })
 
-      return evaluation
+      return errors
     },
     [
       snapshot.beneficiaries,
       snapshot.nominations,
       snapshot.schemes,
       snapshot.users,
+      demoMode,
+      pushActivity,
+    ],
+  )
+
+  const addNominationComment = useCallback(
+    async (
+      nominationId: string,
+      comment: string,
+      actor: string,
+      role: UserRole,
+    ) => {
+      const nomination = snapshot.nominations.find(
+        (item) => item.id === nominationId,
+      )
+      if (!nomination) {
+        throw new Error('The selected nomination could not be found.')
+      }
+      if (!comment.trim()) {
+        throw new Error('Enter a comment before saving.')
+      }
+
+      const comments = appendComment(nomination.comments, actor, role, comment)
+      const mapped = demoMode
+        ? { ...nomination, comments }
+        : mapNomination(
+            await updateNominationComments(nominationId, comments),
+            snapshot.schemes,
+            snapshot.users,
+            snapshot.beneficiaries,
+          )
+      setSnapshot((current) => ({
+        ...current,
+        nominations: current.nominations.map((item) =>
+          item.id === mapped.id ? mapped : item,
+        ),
+      }))
+      pushActivity({
+        action: 'Nomination comment added',
+        subject: nomination.memberName,
+        detail: `${nomination.referenceNumber || `Nomination ${nomination.id}`} received a Tasks comment from ${actor}.`,
+        actor,
+        referenceNumber: nomination.referenceNumber,
+        nominationId: nomination.id,
+      })
+    },
+    [
+      snapshot.beneficiaries,
+      snapshot.nominations,
+      snapshot.schemes,
+      snapshot.users,
+      demoMode,
       pushActivity,
     ],
   )
@@ -499,17 +674,30 @@ export function DataProvider({ children }: { children: ReactNode }) {
         `Corrected nomination details (${changedFields.join(', ') || 'no fields'}).`,
       )
 
-      const updated = await updateNominationRecord(
-        nominationId,
-        correction,
-        comment,
-      )
-      const mapped = mapNomination(
-        updated,
-        snapshot.schemes,
-        snapshot.users,
-        snapshot.beneficiaries,
-      )
+      const scheme = correction.fundName
+        ? snapshot.schemes.find((item) =>
+            [item.title, item.schemeName, item.name].some(
+              (label) =>
+                label.trim().toLowerCase() ===
+                correction.fundName?.trim().toLowerCase(),
+            ),
+          )
+        : undefined
+      const mapped = demoMode
+        ? applyRecordedErrors({
+            ...nomination,
+            ...correction,
+            fundName: correction.fundName ?? nomination.fundName,
+            schemeName: correction.fundName ?? nomination.schemeName,
+            schemeId: scheme?.id ?? nomination.schemeId,
+            comments: comment,
+          })
+        : mapNomination(
+            await updateNominationRecord(nominationId, correction, comment),
+            snapshot.schemes,
+            snapshot.users,
+            snapshot.beneficiaries,
+          )
 
       setSnapshot((current) => ({
         ...current,
@@ -534,6 +722,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       snapshot.nominations,
       snapshot.schemes,
       snapshot.users,
+      demoMode,
       pushActivity,
     ],
   )
@@ -563,13 +752,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
         .filter(([, value]) => value !== undefined)
         .map(([key]) => key)
 
-      const updated = await updateNomineeRecord(beneficiaryId, correction)
-      const mapped = mapBeneficiary(updated)
+      const mapped = demoMode
+        ? { ...existing, ...correction }
+        : mapBeneficiary(await updateNomineeRecord(beneficiaryId, correction))
       const updatedParent = parent
-        ? mapNomination(
-            await updateNominationComments(
-              parent.id,
-              appendComment(
+        ? demoMode
+          ? {
+              ...parent,
+              comments: appendComment(
                 parent.comments,
                 actor,
                 role,
@@ -577,11 +767,23 @@ export function DataProvider({ children }: { children: ReactNode }) {
                   existing.title || existing.id
                 } (${changedFields.join(', ') || 'no fields'}).`,
               ),
-            ),
-            snapshot.schemes,
-            snapshot.users,
-            snapshot.beneficiaries,
-          )
+            }
+          : mapNomination(
+              await updateNominationComments(
+                parent.id,
+                appendComment(
+                  parent.comments,
+                  actor,
+                  role,
+                  `Corrected beneficiary ${
+                    existing.title || existing.id
+                  } (${changedFields.join(', ') || 'no fields'}).`,
+                ),
+              ),
+              snapshot.schemes,
+              snapshot.users,
+              snapshot.beneficiaries,
+            )
         : null
 
       setSnapshot((current) => {
@@ -593,12 +795,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             updatedParent && updatedParent.id === nomination.id
               ? updatedParent
               : nomination
-          return applyEvaluation(
-            source,
-            current.schemes,
-            current.users,
-            beneficiaries,
-          )
+          return applyRecordedErrors(source)
         })
         return { ...current, beneficiaries, nominations }
       })
@@ -616,6 +813,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       snapshot.nominations,
       snapshot.schemes,
       snapshot.users,
+      demoMode,
       pushActivity,
     ],
   )
@@ -912,10 +1110,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
       loading,
       refreshing,
       error,
+      demoMode,
       refresh,
       approveNomination,
       rejectNomination,
       validateNomination,
+      addNominationComment,
       updateNominationDetails,
       updateBeneficiaryDetails,
       createUser,
@@ -928,9 +1128,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }),
     [
       activity,
+      addNominationComment,
       approveNomination,
       createScheme,
       createUser,
+      demoMode,
       error,
       getBeneficiariesForNomination,
       loading,

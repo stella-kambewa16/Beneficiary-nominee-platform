@@ -80,12 +80,25 @@ export function DashboardPage() {
     nominations,
     users,
   )
-  const visibleBeneficiaries = scopedBeneficiaries(
+  const scopedRows = scopedBeneficiaries(
     role,
     profile.email,
     nominations,
     beneficiaries,
     users,
+  )
+  const approvedNominations = visibleNominations.filter(
+    (item) => item.status === 'Approved',
+  )
+  const approvedReferences = new Set(
+    approvedNominations.map((item) => item.referenceNumber).filter(Boolean),
+  )
+  const approvedIds = new Set(approvedNominations.map((item) => item.id))
+  const visibleBeneficiaries = scopedRows.filter(
+    (item) =>
+      (item.refNumber !== '' && approvedReferences.has(item.refNumber)) ||
+      (item.memberItemId !== null &&
+        approvedIds.has(String(item.memberItemId))),
   )
 
   const taskNominations = visibleNominations.filter(isTaskNomination)
@@ -95,10 +108,10 @@ export function DashboardPage() {
     0,
   )
   const pendingPO = visibleNominations.filter(
-    (item) => item.status === 'Pending PO',
+    (item) => item.status === 'Pending PO' && item.errorStatus === 'Clear',
   ).length
   const pendingPA = visibleNominations.filter(
-    (item) => item.status === 'Pending PA',
+    (item) => item.status === 'Pending PA' && item.errorStatus === 'Clear',
   ).length
   const missingScheme = visibleNominations.filter(
     (item) => item.errorStatus === 'Missing Scheme',

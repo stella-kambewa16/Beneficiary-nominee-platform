@@ -73,12 +73,10 @@ export interface Nomination {
   status: NominationStatus
   /** Raw value read from the SharePoint `endorseStatus` column. */
   sourceStatus: string
-  /** Validation gate computed from the nomination and its beneficiaries. */
-  errorStatus: NominationErrorStatus
+  /** Normalized directly from the SharePoint `Errors` column. */
+  errorStatus: NominationErrorStatus | null
   /** Raw value read from the SharePoint `Errors` column, when present. */
   sourceErrors: string
-  /** Human-readable validation findings behind `errorStatus`. */
-  errorFindings: string[]
   /** Append-only validation and endorsement audit trail. */
   comments: string
   warnings: string

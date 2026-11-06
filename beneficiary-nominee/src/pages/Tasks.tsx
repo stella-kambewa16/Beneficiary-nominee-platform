@@ -23,7 +23,7 @@ import type {
   NominationErrorStatus,
 } from '../data/types'
 
-type ErrorFilter = 'All' | NominationErrorStatus
+type ErrorFilter = 'All' | 'Not set' | NominationErrorStatus
 type AgeFilter = 'All' | '0-3' | '4-7' | '8+'
 
 interface MemberDraft {
@@ -74,6 +74,7 @@ export function TasksPage() {
     schemes,
     users,
     validateNomination,
+    addNominationComment,
     updateNominationDetails,
     updateBeneficiaryDetails,
   } = useData()
@@ -86,6 +87,8 @@ export function TasksPage() {
   const [schemeId, setSchemeId] = useState('All')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [errorDraft, setErrorDraft] = useState<NominationErrorStatus | ''>('')
+  const [commentDraft, setCommentDraft] = useState('')
   const [memberDraftState, setMemberDraftState] = useState<MemberDraft>({
     memberNumber: '',
     memberName: '',
@@ -117,13 +120,17 @@ export function TasksPage() {
         nomination.schemeName,
         nomination.fundName,
         nominationSchemeName(schemes, nomination),
-        ...nomination.errorFindings,
+        nomination.sourceErrors,
+        nomination.comments,
       ]
         .join(' ')
         .toLowerCase()
         .includes(query)
     const matchesError =
-      errorFilter === 'All' || nomination.errorStatus === errorFilter
+      errorFilter === 'All' ||
+      (errorFilter === 'Not set'
+        ? nomination.errorStatus === null
+        : nomination.errorStatus === errorFilter)
     const matchesScheme =
       schemeId === 'All' || nomination.schemeId === schemeId
     const age = ageInDays(nomination.submissionDate)
@@ -145,6 +152,8 @@ export function TasksPage() {
 
   const openTask = (nomination: Nomination) => {
     setSelectedId(nomination.id)
+    setErrorDraft(nomination.errorStatus ?? '')
+    setCommentDraft('')
     setMemberDraftState(memberDraft(nomination))
     setSchemeDraft(nomination.schemeId)
     const linked = beneficiariesForNomination(nomination, beneficiaries)
@@ -191,8 +200,8 @@ export function TasksPage() {
         nomination.memberNumber,
         nomination.memberName,
         nominationSchemeName(schemes, nomination),
-        nomination.errorStatus,
-        nomination.errorFindings.join(' '),
+        nomination.errorStatus ?? 'Not set',
+        nomination.comments,
         nomination.endorsement1Name,
         nomination.endorsement2Name,
         nomination.comments,
@@ -257,7 +266,7 @@ export function TasksPage() {
       notify(
         'success',
         'Member details updated',
-        'Re-evaluate the nomination to refresh its Errors status.',
+        'Update the Errors status from the SharePoint Errors column after review.',
       )
     } catch (error) {
       notify(
@@ -299,7 +308,7 @@ export function TasksPage() {
       notify(
         'success',
         'Beneficiary updated',
-        'Re-evaluate the nomination to refresh its Errors status.',
+        'Update the Errors status from the SharePoint Errors column after review.',
       )
     } catch (error) {
       notify(
@@ -314,18 +323,27 @@ export function TasksPage() {
 
   const handleValidate = async () => {
     if (!selected) return
+    if (!errorDraft) {
+      notify(
+        'error',
+        'Select an Errors status',
+        'Choose a value to save to the SharePoint Errors column.',
+      )
+      return
+    }
     setBusy(true)
     try {
-      const evaluation = await validateNomination(
+      const savedErrors = await validateNomination(
         selected.id,
+        errorDraft,
         role,
         profile.name,
       )
-      if (evaluation.status === 'Clear') {
+      if (savedErrors === 'Clear') {
         notify(
           'success',
-          'Validation passed',
-          `${selected.referenceNumber || selected.memberName} is clear. If it was in Tasks it has moved to Pending PO.`,
+          'Errors updated',
+          `${selected.referenceNumber || selected.memberName} has been updated from the SharePoint Errors value.`,
         )
         if (selected.status === 'Tasks' || selected.status === 'Submitted') {
           closeDrawer()
@@ -333,14 +351,37 @@ export function TasksPage() {
       } else {
         notify(
           'info',
-          'Still in Tasks',
-          `${evaluation.status}: ${evaluation.findings.join(' ')}`,
+          'Errors updated',
+          `${savedErrors} was saved to SharePoint. The nomination remains in Tasks.`,
         )
       }
     } catch (error) {
       notify(
         'error',
         'Validation failed',
+        error instanceof Error ? error.message : 'Please try again.',
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleAddComment = async () => {
+    if (!selected || !commentDraft.trim()) return
+    setBusy(true)
+    try {
+      await addNominationComment(
+        selected.id,
+        commentDraft,
+        profile.name,
+        role,
+      )
+      setCommentDraft('')
+      notify('success', 'Comment saved', 'The nomination comments were updated.')
+    } catch (error) {
+      notify(
+        'error',
+        'Comment not saved',
         error instanceof Error ? error.message : 'Please try again.',
       )
     } finally {
@@ -375,8 +416,7 @@ export function TasksPage() {
           <div className="panel-heading">
             <h2 className="panel-title">Validation queue</h2>
             <p className="panel-subtitle">
-              Only nominations with Errors = Clear can move to Beneficiary
-              Nominations.
+              Only nominations with Errors = Clear move to Pending PO.
             </p>
           </div>
           <div className="panel-actions">
@@ -390,7 +430,7 @@ export function TasksPage() {
             <input
               type="search"
               className="search-input"
-              placeholder="Search reference, member, scheme or finding"
+              placeholder="Search reference, member, scheme or comment"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               aria-label="Search tasks"
@@ -418,6 +458,7 @@ export function TasksPage() {
             aria-label="Filter by error status"
           >
             <option value="All">All error statuses</option>
+            <option value="Not set">Not set</option>
             {errorFilters.map((item) => (
               <option key={item} value={item}>
                 {item}
@@ -449,7 +490,7 @@ export function TasksPage() {
                   <th>Scheme</th>
                   <th>Principal Officer</th>
                   <th>Error Status</th>
-                  <th>Validation Findings</th>
+                  <th>Latest Comment</th>
                   <th>Submitted</th>
                   <th>Updated</th>
                   <th>Age</th>
@@ -497,12 +538,8 @@ export function TasksPage() {
                     </td>
                     <td>
                       <span className="cell-muted">
-                        {nomination.errorFindings.length
-                          ? nomination.errorFindings[0]
-                          : 'All checks passed'}
-                        {nomination.errorFindings.length > 1
-                          ? ` (+${nomination.errorFindings.length - 1} more)`
-                          : ''}
+                        {commentLines(nomination.comments).at(-1) ??
+                          'No comments recorded'}
                       </span>
                     </td>
                     <td>{formatDate(nomination.submissionDate)}</td>
@@ -588,7 +625,7 @@ export function TasksPage() {
                 <Icon
                   name={
                     !busy &&
-                    selected.errorStatus === 'Clear' &&
+                    errorDraft === 'Clear' &&
                     (selected.status === 'Tasks' ||
                       selected.status === 'Submitted')
                       ? 'check-circle'
@@ -597,12 +634,12 @@ export function TasksPage() {
                   size={14}
                 />
                 {busy
-                  ? 'Checking…'
-                  : selected.errorStatus === 'Clear' &&
+                  ? 'Saving…'
+                  : errorDraft === 'Clear' &&
                       (selected.status === 'Tasks' ||
                         selected.status === 'Submitted')
-                    ? 'Move to Beneficiary Nominations'
-                    : 'Re-evaluate'}
+                    ? 'Save Errors and move to Pending PO'
+                    : 'Save Errors status'}
               </button>
               <button
                 type="button"
@@ -631,41 +668,56 @@ export function TasksPage() {
                 <ErrorStatusBadge status={selected.errorStatus} />
                 <NominationStatusBadge status={selected.status} />
               </div>
-              {selected.errorFindings.length ? (
-                <div className="notice is-danger">
-                  <Icon
-                    name="alert-circle"
-                    size={14}
-                    className="notice-icon"
-                  />
-                  <span>
-                    <strong>{selected.errorStatus}</strong>
-                    <span
-                      style={{ display: 'block', marginTop: 4 }}
-                    >
-                      {selected.errorFindings.map((finding) => (
-                        <span
-                          key={finding}
-                          style={{ display: 'block' }}
-                        >
-                          • {finding}
-                        </span>
-                      ))}
-                    </span>
-                  </span>
-                </div>
-              ) : (
-                <div className="notice is-success">
-                  <Icon name="check-circle" size={14} className="notice-icon" />
-                  <span>All validation checks passed.</span>
-                </div>
-              )}
+              <div
+                className={`notice ${
+                  selected.errorStatus === 'Clear'
+                    ? 'is-success'
+                    : 'is-info'
+                }`}
+              >
+                <Icon
+                  name={
+                    selected.errorStatus === 'Clear'
+                      ? 'check-circle'
+                      : 'info'
+                  }
+                  size={14}
+                  className="notice-icon"
+                />
+                <span>
+                  Errors is read from the SharePoint Errors column. Update it
+                  only after reviewing the nomination and recording notes in
+                  Comments.
+                </span>
+              </div>
+              <div className="field" style={{ marginTop: 12 }}>
+                <label className="label" htmlFor="task-errors">
+                  SharePoint Errors status
+                </label>
+                <select
+                  id="task-errors"
+                  className="select"
+                  value={errorDraft}
+                  onChange={(event) =>
+                    setErrorDraft(
+                      event.target.value as NominationErrorStatus | '',
+                    )
+                  }
+                >
+                  <option value="">Select an Errors status</option>
+                  {errorFilters.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </div>
               {selected.errorStatus === 'Missing Principal Officer' ? (
                 <div className="notice is-info" style={{ marginTop: 10 }}>
                   <Icon name="info" size={14} className="notice-icon" />
                   <span>
                     Assign an active Principal Officer to the scheme before
-                    re-evaluating.{' '}
+                    setting Errors to Clear and promoting the nomination.{' '}
                     <button
                       type="button"
                       className="button button-secondary button-small"
@@ -960,6 +1012,29 @@ export function TasksPage() {
               ) : (
                 <p className="help">No comments recorded yet.</p>
               )}
+              <div className="field" style={{ marginTop: 16 }}>
+                <label className="label" htmlFor="task-comment">
+                  Add a follow-up note
+                </label>
+                <textarea
+                  id="task-comment"
+                  className="textarea"
+                  rows={3}
+                  value={commentDraft}
+                  onChange={(event) => setCommentDraft(event.target.value)}
+                  placeholder="Record review notes, follow-up actions, or other comments."
+                />
+              </div>
+              <div className="form-actions">
+                <button
+                  type="button"
+                  className="button button-secondary button-small"
+                  disabled={busy || !commentDraft.trim()}
+                  onClick={() => void handleAddComment()}
+                >
+                  Save comment
+                </button>
+              </div>
             </section>
 
             <section className="drawer-section">

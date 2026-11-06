@@ -22,6 +22,7 @@ export interface DataContextValue {
   loading: boolean
   refreshing: boolean
   error: string | null
+  demoMode: boolean
   refresh: () => Promise<void>
   approveNomination: (
     nominationId: string,
@@ -39,9 +40,16 @@ export interface DataContextValue {
   ) => Promise<void>
   validateNomination: (
     nominationId: string,
+    status: NominationErrorStatus,
     role: UserRole,
     actor: string,
-  ) => Promise<{ status: NominationErrorStatus; findings: string[] }>
+  ) => Promise<NominationErrorStatus>
+  addNominationComment: (
+    nominationId: string,
+    comment: string,
+    actor: string,
+    role: UserRole,
+  ) => Promise<void>
   updateNominationDetails: (
     nominationId: string,
     correction: NominationCorrection,

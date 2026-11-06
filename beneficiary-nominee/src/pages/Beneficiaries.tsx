@@ -31,7 +31,7 @@ export function BeneficiariesPage() {
     nominations,
     users,
   )
-  const visibleBeneficiaries = scopedBeneficiaries(
+  const scopedRows = scopedBeneficiaries(
     role,
     profile.email,
     nominations,
@@ -40,10 +40,12 @@ export function BeneficiariesPage() {
   )
 
   const nominationByRef = new Map(
-    visibleNominations.map((nomination) => [
-      nomination.referenceNumber,
-      nomination,
-    ]),
+    visibleNominations
+      .filter((nomination) => nomination.status === 'Approved')
+      .map((nomination) => [
+        nomination.referenceNumber,
+        nomination,
+      ]),
   )
   const nominationFor = (beneficiary: Beneficiary) => {
     if (beneficiary.refNumber) {
@@ -52,12 +54,18 @@ export function BeneficiariesPage() {
     }
     if (beneficiary.memberItemId !== null) {
       return visibleNominations.find(
-        (nomination) => nomination.id === String(beneficiary.memberItemId),
+        (nomination) =>
+          nomination.id === String(beneficiary.memberItemId) &&
+          nomination.status === 'Approved',
       )
     }
     return undefined
   }
   const query = search.trim().toLowerCase()
+
+  const visibleBeneficiaries = scopedRows.filter((beneficiary) =>
+    Boolean(nominationFor(beneficiary)),
+  )
 
   const relationshipOptions = Array.from(
     new Set(
@@ -134,7 +142,7 @@ export function BeneficiariesPage() {
   return (
     <div className="page-stack">
       <header className="page-heading">
-        <h1 className="page-heading-title">Beneficiaries</h1>
+        <h1 className="page-heading-title">Active Beneficiaries</h1>
         <div className="hero-actions">
           <button
             type="button"
@@ -150,7 +158,7 @@ export function BeneficiariesPage() {
       <section className="panel">
         <div className="panel-header">
           <div className="panel-heading">
-            <h2 className="panel-title">Beneficiary register</h2>
+            <h2 className="panel-title">Approved nomination beneficiaries</h2>
           </div>
         </div>
 
