@@ -5,7 +5,7 @@ import { useAuth } from '../auth/auth-context'
 import { roleLabel, roleOrder, roleProfiles } from '../auth/roles'
 
 export function RoleMenu() {
-  const { role, profile, setRole } = useAuth()
+  const { role, profile, setRole, previewEnabled } = useAuth()
   const { notify } = useToast()
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -35,13 +35,15 @@ export function RoleMenu() {
     }
   }, [open])
 
+  if (!previewEnabled) return null
+
   const selectRole = (next: typeof role) => {
     setOpen(false)
     if (next === role) return
     setRole(next)
     notify(
       'info',
-      `Viewing as ${roleLabel(next)}`,
+      `Previewing as ${roleLabel(next)}`,
       roleProfiles[next].description,
     )
   }
@@ -54,7 +56,7 @@ export function RoleMenu() {
         onClick={() => setOpen((value) => !value)}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Signed in as ${profile.name}, ${profile.title}. Switch role`}
+        aria-label={`Signed in as ${profile.name}, ${profile.title}. Switch preview role`}
       >
         <span className="avatar-sm" aria-hidden="true">
           {profile.initials}
@@ -67,7 +69,7 @@ export function RoleMenu() {
       </button>
 
       {open ? (
-        <div className="user-menu" role="menu" aria-label="Switch demo role">
+        <div className="user-menu" role="menu" aria-label="Switch preview role">
           <div className="user-menu-head">
             <p className="user-menu-label">Signed in as</p>
             <p className="user-menu-current">{profile.name}</p>
@@ -75,7 +77,7 @@ export function RoleMenu() {
           </div>
 
           <p className="user-menu-label user-menu-switch-label">
-            Switch demo role
+            Switch preview role
           </p>
 
           {roleOrder.map((option) => {
@@ -111,8 +113,8 @@ export function RoleMenu() {
           })}
 
           <p className="user-menu-note">
-            Demo only — role changes apply instantly and are stored in this
-            browser.
+            Preview only — this local role override never grants production
+            access and is stored in this browser.
           </p>
         </div>
       ) : null}

@@ -7,11 +7,13 @@
 export * as CommonModels from './models/CommonModels';
 export * as NominationMembersModel from './models/NominationMembersModel';
 export * as NominationNomineesModel from './models/NominationNomineesModel';
+export * as Office365OutlookModel from './models/Office365OutlookModel';
 export * as PrincipalOfficersModel from './models/PrincipalOfficersModel';
 export * as SchemesModel from './models/SchemesModel';
 
 // Services
 export * from './services/NominationMembersService';
 export * from './services/NominationNomineesService';
+export * from './services/Office365OutlookService';
 export * from './services/PrincipalOfficersService';
 export * from './services/SchemesService';

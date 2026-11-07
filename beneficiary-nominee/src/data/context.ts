@@ -62,8 +62,15 @@ export interface DataContextValue {
     actor: string,
     role: UserRole,
   ) => Promise<void>
-  createUser: (draft: UserDraft, actor: string) => Promise<void>
-  updateUser: (id: string, draft: UserDraft, actor: string) => Promise<void>
+  createUser: (
+    draft: UserDraft,
+    actor: string,
+  ) => Promise<{ rolesSaved: boolean }>
+  updateUser: (
+    id: string,
+    draft: UserDraft,
+    actor: string,
+  ) => Promise<{ rolesSaved: boolean }>
   toggleUserStatus: (id: string, actor: string) => Promise<void>
   createScheme: (draft: SchemeDraft, actor: string) => Promise<void>
   updateScheme: (id: string, draft: SchemeDraft, actor: string) => Promise<void>

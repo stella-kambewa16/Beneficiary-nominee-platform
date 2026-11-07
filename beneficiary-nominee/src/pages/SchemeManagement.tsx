@@ -2,9 +2,12 @@ import { useState } from 'react'
 import { useData } from '../data/context'
 import { Icon } from '../components/Icon'
 import { Drawer } from '../components/Drawer'
+import { Pagination } from '../components/Pagination'
 import { useToast } from '../components/toast-context'
+import { usePagination } from '../lib/pagination'
 import { useAuth } from '../auth/auth-context'
 import { formatDate, initials } from '../lib/format'
+import { userHasScheme } from '../lib/nominations'
 import type {
   Scheme,
   SchemeDraft,
@@ -40,7 +43,15 @@ export function SchemeManagementPage() {
   const [busy, setBusy] = useState(false)
 
   const principalOfficer = (schemeId: string): SystemUser | undefined =>
-    users.find((user) => user.schemeId === schemeId)
+    users.find(
+      (user) =>
+        user.role === 'Principal Officer' && userHasScheme(user, schemeId),
+    ) ??
+    users.find(
+      (user) =>
+        user.role === 'Pension Adminstration' &&
+        userHasScheme(user, schemeId),
+    )
 
   const query = search.trim().toLowerCase()
   const filtered = schemes.filter((scheme) => {
@@ -54,6 +65,7 @@ export function SchemeManagementPage() {
     const matchesStatus = status === 'All' || scheme.status === status
     return matchesSearch && matchesStatus
   })
+  const pagination = usePagination(filtered.length)
 
   const openCreate = () => {
     setEditingId(null)
@@ -162,16 +174,20 @@ export function SchemeManagementPage() {
               className="search-input"
               placeholder="Search scheme or Principal Officer"
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                setSearch(event.target.value)
+                pagination.setPage(1)
+              }}
               aria-label="Search schemes"
             />
           </div>
           <select
             className="filter-select"
             value={status}
-            onChange={(event) =>
+            onChange={(event) => {
               setStatus(event.target.value as SchemeStatusFilter)
-            }
+              pagination.setPage(1)
+            }}
             aria-label="Filter by scheme status"
           >
             <option value="All">All statuses</option>
@@ -201,10 +217,15 @@ export function SchemeManagementPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((scheme) => {
+                {filtered.map((scheme, index) => {
                   const officer = principalOfficer(scheme.id)
                   return (
-                    <tr key={scheme.id}>
+                    <tr
+                      key={scheme.id}
+                      className={
+                        pagination.isVisible(index) ? undefined : 'is-page-hidden'
+                      }
+                    >
                       <td>
                         <span className="cell-strong">{scheme.name}</span>
                         {scheme.title && scheme.title !== scheme.name ? (
@@ -301,7 +322,10 @@ export function SchemeManagementPage() {
               <button
                 type="button"
                 className="button button-secondary button-small"
-                onClick={() => setSearch('')}
+                onClick={() => {
+                  setSearch('')
+                  pagination.setPage(1)
+                }}
               >
                 Clear search
               </button>
@@ -309,16 +333,15 @@ export function SchemeManagementPage() {
           </div>
         )}
 
-        <div className="panel-footer">
-          <div className="notice is-info">
-            <Icon name="info" size={14} className="notice-icon" />
-            <span>
-              Scheme names and status are stored in the schemes SharePoint
-              list; disabling a scheme preserves its existing nominations and
-              assignments.
-            </span>
-          </div>
-        </div>
+        <Pagination
+          page={pagination.page}
+          pageCount={pagination.pageCount}
+          totalItems={filtered.length}
+          start={pagination.start}
+          end={pagination.end}
+          onPageChange={pagination.setPage}
+          itemLabel="schemes"
+        />
       </section>
 
       <Drawer
@@ -392,26 +415,32 @@ export function SchemeManagementPage() {
               }
             >
               <option value="">Unassigned</option>
-              {users.map((user) => {
-                const assignedScheme = schemes.find(
-                  (scheme) => scheme.id === user.schemeId,
+              {users
+                .filter(
+                  (user) =>
+                    user.role === 'Principal Officer' ||
+                    user.role === 'Pension Adminstration',
                 )
-                return (
-                  <option key={user.id} value={user.id}>
-                    {user.name}
-                    {user.status === 'Disabled' ? ' (Disabled)' : ''}
-                    {assignedScheme &&
-                    assignedScheme.id !== editingId
-                      ? ` — currently ${assignedScheme.name}`
-                      : ''}
-                  </option>
-                )
-              })}
+                .map((user) => {
+                  const assignedSchemes = schemes.filter(
+                    (scheme) =>
+                      userHasScheme(user, scheme.id) &&
+                      scheme.id !== editingId,
+                  )
+                  return (
+                    <option key={user.id} value={user.id}>
+                      {user.name} — {user.role}
+                      {user.status === 'Disabled' ? ' (Disabled)' : ''}
+                      {assignedSchemes.length
+                        ? ` — also assigned to ${assignedSchemes.map((scheme) => scheme.name).join(', ')}`
+                        : ''}
+                    </option>
+                  )
+                })}
             </select>
             <p className="help">
-              Assigning an officer writes the scheme’s code and name to their
-              schemecode and schemename fields. Existing officers are not
-              removed automatically.
+              Assigning an officer adds this scheme while retaining their
+              other scheme assignments.
             </p>
           </div>
         </div>

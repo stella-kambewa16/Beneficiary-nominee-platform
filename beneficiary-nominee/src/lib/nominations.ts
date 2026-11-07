@@ -1,7 +1,5 @@
 import type { Role } from '../auth/roles'
 import type {
-  ApprovalEvent,
-  Beneficiary,
   Nomination,
   NominationStatus,
   Scheme,
@@ -24,27 +22,24 @@ export function nominationSchemeName(
 }
 
 export function userSchemeLabel(user: SystemUser, schemes: Scheme[]): string {
-  if (!user.schemeId) return user.schemeName || user.schemeCode || 'Unassigned'
-  return schemeName(schemes, user.schemeId)
+  const assignedSchemeIds = user.schemeIds.length
+    ? user.schemeIds
+    : user.schemeId
+      ? [user.schemeId]
+      : []
+  const labels = assignedSchemeIds
+    .map((id) => schemeName(schemes, id))
+    .filter((name) => name !== '—')
+  return labels.length
+    ? labels.join(', ')
+    : user.schemeName || user.schemeCode || 'Unassigned'
 }
 
-export function principalOfficerForScheme(
-  users: SystemUser[],
-  schemeId: string,
-): SystemUser | undefined {
-  return users.find((user) => user.schemeId === schemeId)
+export function userHasScheme(user: SystemUser, schemeId: string): boolean {
+  return user.schemeIds.includes(schemeId) || user.schemeId === schemeId
 }
 
-export function activePrincipalOfficerForScheme(
-  users: SystemUser[],
-  schemeId: string,
-): SystemUser | undefined {
-  return users.find(
-    (user) => user.schemeId === schemeId && user.status === 'Active',
-  )
-}
-
-export function isPendingStatus(status: NominationStatus): boolean {
+function isPendingStatus(status: NominationStatus): boolean {
   return status === 'Pending PO' || status === 'Pending PA'
 }
 
@@ -57,29 +52,19 @@ export function isTaskNomination(nomination: Nomination): boolean {
   )
 }
 
-export function principalOfficerName(
-  users: SystemUser[],
-  schemeId: string,
-): string {
-  return principalOfficerForScheme(users, schemeId)?.name ?? 'Unassigned'
-}
-
-export function beneficiaryCount(
-  beneficiaries: Beneficiary[],
-  refNumber: string,
-): number {
-  return beneficiaries.filter((item) => item.refNumber === refNumber).length
-}
-
 export function canActOnNomination(
   role: Role,
   status: NominationStatus,
 ): boolean {
   if (status === 'Pending PO') {
-    return role === 'Principal Officer' || role === 'Admin'
+    return (
+      role === 'Principal Officer' ||
+      role === 'Pension Adminstration' ||
+      role === 'Adminstration'
+    )
   }
   if (status === 'Pending PA') {
-    return role === 'Pension Manager' || role === 'Admin'
+    return role === 'Pension Adminstration' || role === 'Adminstration'
   }
   return false
 }
@@ -88,39 +73,4 @@ export function nextStageLabel(status: NominationStatus): string {
   if (status === 'Pending PO') return 'Pending PA (Pension Administrator review)'
   if (status === 'Pending PA') return 'Approved'
   return 'Closed'
-}
-
-export interface NominationActivity {
-  id: string
-  action: string
-  subject: string
-  detail: string
-  date: string
-  decision: ApprovalEvent['decision']
-  referenceNumber: string
-  nominationId: string
-}
-
-export function nominationActivity(
-  nominations: Nomination[],
-): NominationActivity[] {
-  return nominations
-    .flatMap((nomination) =>
-      nomination.approvalHistory.map((event, index) => ({
-        id: `${nomination.id}-${index}`,
-        action:
-          event.decision === 'Submitted'
-            ? 'Nomination submitted'
-            : `${event.stage} ${event.decision.toLowerCase()}`,
-        subject: nomination.memberName,
-        detail: `${nomination.referenceNumber || nomination.id} · ${
-          event.actor
-        }`,
-        date: event.date,
-        decision: event.decision,
-        referenceNumber: nomination.referenceNumber,
-        nominationId: nomination.id,
-      })),
-    )
-    .sort((a, b) => b.date.localeCompare(a.date))
 }

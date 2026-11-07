@@ -3,11 +3,14 @@ import { navigate } from '../router'
 import { Icon } from '../components/Icon'
 import type { IconName } from '../components/Icon'
 import { NominationStatusBadge } from '../components/Badges'
+import { Pagination } from '../components/Pagination'
+import { usePagination } from '../lib/pagination'
 import { useAuth } from '../auth/auth-context'
 import { formatDateTime } from '../lib/format'
 import {
   isTaskNomination,
   nominationSchemeName,
+  userHasScheme,
 } from '../lib/nominations'
 import {
   scopedBeneficiaries,
@@ -130,10 +133,10 @@ export function DashboardPage() {
   ).length
   const activeOfficers = users.filter((user) => user.status === 'Active').length
   const assignedOfficers = users.filter(
-    (user) => user.schemeId !== null,
+    (user) => user.schemeIds.length > 0 || user.schemeId !== null,
   ).length
   const assignedSchemes = schemes.filter((scheme) =>
-    users.some((user) => user.schemeId === scheme.id),
+    users.some((user) => userHasScheme(user, scheme.id)),
   ).length
   const activeSchemes = schemes.filter(
     (scheme) => scheme.status === 'Active',
@@ -151,9 +154,40 @@ export function DashboardPage() {
     ) / Math.max(visibleBeneficiaries.length, 1),
   )
 
-  const recent = [...visibleNominations]
-    .sort((a, b) => b.submissionDate.localeCompare(a.submissionDate))
-    .slice(0, 5)
+  const recent = [...visibleNominations].sort((a, b) =>
+    b.submissionDate.localeCompare(a.submissionDate),
+  )
+  const pagination = usePagination(recent.length)
+
+  if (role === 'Employee') {
+    return (
+      <div className="page-stack">
+        <section className="panel">
+          <div className="panel-header">
+            <div className="panel-heading">
+              <h2 className="panel-title">Read-only access</h2>
+              <p className="panel-subtitle">
+                Signed in as {profile.name}
+                {profile.email ? ` (${profile.email})` : ''}.
+              </p>
+            </div>
+          </div>
+          <div className="empty-state">
+            <span className="empty-icon">
+              <Icon name="lock" size={20} />
+            </span>
+            <p className="empty-title">No workflow role assigned</p>
+            <p className="empty-text">
+              Your account can view this workspace shell but cannot see
+              nomination or beneficiary data. Ask an administrator to assign a
+              Pension Adminstration or Adminstration
+              role in the principalOfficers list.
+            </p>
+          </div>
+        </section>
+      </div>
+    )
+  }
 
   const visibleNominationIds = new Set(
     visibleNominations.map((item) => item.id),
@@ -161,7 +195,7 @@ export function DashboardPage() {
   const recentActivity = [...activity]
     .filter(
       (item) =>
-        role !== 'Principal Officer' ||
+        role !== 'Pension Adminstration' ||
         !item.nominationId ||
         visibleNominationIds.has(item.nominationId),
     )
@@ -390,9 +424,9 @@ export function DashboardPage() {
         <section className="panel">
           <div className="panel-header">
             <div className="panel-heading">
-              <h2 className="panel-title">Recent nominations</h2>
+              <h2 className="panel-title">Nominations</h2>
               <p className="panel-subtitle">
-                The latest records from Nomination Members.
+                Records from Nomination Members, latest first.
               </p>
             </div>
             <div className="panel-actions">
@@ -419,10 +453,12 @@ export function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {recent.map((nomination) => (
+                  {recent.map((nomination, index) => (
                     <tr
                       key={nomination.id}
-                      className="is-clickable"
+                      className={`is-clickable${
+                        pagination.isVisible(index) ? '' : ' is-page-hidden'
+                      }`}
                       onClick={() =>
                         navigate(`/nominations?nomination=${nomination.id}`)
                       }
@@ -453,6 +489,16 @@ export function DashboardPage() {
               </p>
             </div>
           )}
+
+          <Pagination
+            page={pagination.page}
+            pageCount={pagination.pageCount}
+            totalItems={recent.length}
+            start={pagination.start}
+            end={pagination.end}
+            onPageChange={pagination.setPage}
+            itemLabel="nominations"
+          />
         </section>
 
         <section className="panel">

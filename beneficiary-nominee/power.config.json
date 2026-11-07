@@ -1,10 +1,10 @@
 {
   "version": "1.0",
-  "appId": null,
+  "appId": "3edcd049-8812-4611-b89c-8ed0f2ace77a",
   "appDisplayName": "Beneficiary nominee platform",
   "region": "prod",
   "appType": "CodeApp",
-  "environmentId": "de100920-e570-ec0d-a95c-64551a2e6344",
+  "environmentId": "4f635774-9023-eb2f-ae3a-15a86c533153",
   "description": " ",
   "buildPath": "./dist",
   "buildEntryPoint": "index.html",
@@ -38,6 +38,14 @@
           }
         }
       }
+    },
+    "0d4431ea-70c7-4199-9c11-0b0b3953589a": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_office365",
+      "displayName": "Office 365 Outlook",
+      "dataSources": [
+        "office365"
+      ],
+      "dataSets": {}
     }
   },
   "databaseReferences": {}

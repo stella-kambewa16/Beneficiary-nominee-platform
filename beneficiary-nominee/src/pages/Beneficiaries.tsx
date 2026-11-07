@@ -6,12 +6,15 @@ import {
   NominationStatusBadge,
 } from '../components/Badges'
 import { Drawer } from '../components/Drawer'
+import { Pagination } from '../components/Pagination'
 import { useToast } from '../components/toast-context'
+import { usePagination } from '../lib/pagination'
 import { useAuth } from '../auth/auth-context'
 import { downloadCsv } from '../lib/export'
 import { formatDate, initials } from '../lib/format'
-import { schemeName, principalOfficerForScheme } from '../lib/nominations'
+import { schemeName } from '../lib/nominations'
 import { scopedBeneficiaries, scopedNominations } from '../lib/scope'
+import { activePrincipalOfficerForScheme } from '../lib/validation'
 import type { Beneficiary, Relationship } from '../data/types'
 
 type RelationshipFilter = 'All' | Relationship
@@ -97,6 +100,7 @@ export function BeneficiariesPage() {
       relationship === 'All' || beneficiary.relationship === relationship
     return matchesSearch && matchesRelationship
   })
+  const pagination = usePagination(filtered.length)
 
   const selected =
     visibleBeneficiaries.find((item) => item.id === selectedId) ?? null
@@ -170,16 +174,20 @@ export function BeneficiariesPage() {
               className="search-input"
               placeholder="Search beneficiary, member or reference"
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                setSearch(event.target.value)
+                pagination.setPage(1)
+              }}
               aria-label="Search beneficiaries"
             />
           </div>
           <select
             className="filter-select"
             value={relationship}
-            onChange={(event) =>
+            onChange={(event) => {
               setRelationship(event.target.value as RelationshipFilter)
-            }
+              pagination.setPage(1)
+            }}
             aria-label="Filter by relationship"
           >
             <option value="All">All relationships</option>
@@ -211,12 +219,14 @@ export function BeneficiariesPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((beneficiary) => {
+                {filtered.map((beneficiary, index) => {
                   const nomination = nominationFor(beneficiary)
                   return (
                     <tr
                       key={beneficiary.id}
-                      className="is-clickable"
+                      className={`is-clickable${
+                        pagination.isVisible(index) ? '' : ' is-page-hidden'
+                      }`}
                       onClick={() => setSelectedId(beneficiary.id)}
                     >
                       <td>
@@ -291,6 +301,7 @@ export function BeneficiariesPage() {
                 onClick={() => {
                   setSearch('')
                   setRelationship('All')
+                  pagination.setPage(1)
                 }}
               >
                 Clear filters
@@ -298,6 +309,16 @@ export function BeneficiariesPage() {
             </div>
           </div>
         )}
+
+        <Pagination
+          page={pagination.page}
+          pageCount={pagination.pageCount}
+          totalItems={filtered.length}
+          start={pagination.start}
+          end={pagination.end}
+          onPageChange={pagination.setPage}
+          itemLabel="beneficiaries"
+        />
       </section>
 
       <Drawer
@@ -413,8 +434,8 @@ export function BeneficiariesPage() {
                 <Icon name="info" size={14} className="notice-icon" />
                 <span>
                   {selectedScheme.name} is managed by{' '}
-                  {principalOfficerForScheme(users, selectedScheme.id)?.name ??
-                    'an unassigned Principal Officer'}
+                  {activePrincipalOfficerForScheme(users, selectedScheme.id)
+                    ?.name ?? 'an unassigned Principal Officer'}
                   .
                 </span>
               </div>

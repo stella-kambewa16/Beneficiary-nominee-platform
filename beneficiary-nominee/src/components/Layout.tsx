@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Icon } from './Icon'
+import { RoleMenu } from './RoleMenu'
 import { useAuth } from '../auth/auth-context'
 import { useData } from '../data/context'
 import {
@@ -24,24 +25,23 @@ export function Layout({ route, children }: {
   route: RouteState
   children: ReactNode
 }) {
-  const { role, profile } = useAuth()
+  const {
+    role,
+    profile,
+    warning,
+    roleSource,
+    previewEnabled,
+    retry,
+  } = useAuth()
   const {
     loading,
     refreshing,
     error,
     refresh,
     nominations,
-    beneficiaries,
     demoMode,
   } = useData()
   const taskCount = nominations.filter(isTaskNomination).length
-  const activeNominations = nominations.filter(
-    (nomination) => nomination.status === 'Approved',
-  )
-  const activeReferences = new Set(
-    activeNominations.map((nomination) => nomination.referenceNumber),
-  )
-  const activeIds = new Set(activeNominations.map((nomination) => nomination.id))
   const navCounts: Record<string, number> = {
     '/tasks': taskCount,
     '/pending-po': nominations.filter(
@@ -53,14 +53,6 @@ export function Layout({ route, children }: {
       (nomination) =>
         nomination.status === 'Pending PA' &&
         nomination.errorStatus === 'Clear',
-    ).length,
-    '/nominations': activeNominations.length,
-    '/beneficiaries': beneficiaries.filter(
-      (beneficiary) =>
-        (beneficiary.refNumber !== '' &&
-          activeReferences.has(beneficiary.refNumber)) ||
-        (beneficiary.memberItemId !== null &&
-          activeIds.has(String(beneficiary.memberItemId))),
     ).length,
   }
   const [collapsed, setCollapsed] = useState(readCollapsed)
@@ -196,20 +188,43 @@ export function Layout({ route, children }: {
         </nav>
 
         <div className="sidebar-footer">
-          <div className="user-card">
-            <span className="avatar" aria-hidden="true">
-              {profile.initials}
-            </span>
-            <span className="user-meta">
-              <span className="user-name">{profile.name}</span>
-              <span className="user-role">{profile.title}</span>
-            </span>
-          </div>
+          {previewEnabled ? (
+            <RoleMenu />
+          ) : (
+            <div className="user-card">
+              <span className="avatar" aria-hidden="true">
+                {profile.initials}
+              </span>
+              <span className="user-meta">
+                <span className="user-name">{profile.name}</span>
+                <span className="user-role">
+                  {roleSource === 'default'
+                    ? `${profile.title} · read-only`
+                    : profile.title}
+                </span>
+              </span>
+            </div>
+          )}
         </div>
       </aside>
 
       <div className="main-column">
         <main className="content">
+          {warning ? (
+            <div className="notice is-info data-banner" role="status">
+              <Icon name="shield" size={14} className="notice-icon" />
+              <span className="data-banner-text">{warning}</span>
+              {role === 'Employee' && roleSource === 'default' ? (
+                <button
+                  type="button"
+                  className="button button-secondary button-small data-banner-action"
+                  onClick={retry}
+                >
+                  Retry role check
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {demoMode ? (
             <div className="notice is-info data-banner" role="status">
               <Icon name="info" size={14} className="notice-icon" />

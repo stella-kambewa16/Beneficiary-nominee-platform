@@ -5,15 +5,28 @@ import type {
   UserRole,
 } from '../data/types'
 
-export function assignedSchemeId(
+function assignedSchemeIds(
   email: string,
   users: SystemUser[],
-): string | null {
+): string[] {
   const needle = email.trim().toLowerCase()
-  return (
-    users.find((user) => user.email.trim().toLowerCase() === needle)?.schemeId ??
-    null
+  const user = users.find(
+    (item) =>
+      item.email.trim().toLowerCase() === needle &&
+      (item.role === 'Principal Officer' ||
+        item.role === 'Pension Adminstration') &&
+      item.status === 'Active',
   )
+  if (!user) return []
+  return [
+    ...new Set(
+      user.schemeIds.length
+        ? user.schemeIds
+        : user.schemeId
+          ? [user.schemeId]
+          : [],
+    ),
+  ]
 }
 
 export function scopedNominations(
@@ -22,10 +35,41 @@ export function scopedNominations(
   nominations: Nomination[],
   users: SystemUser[],
 ): Nomination[] {
-  if (role !== 'Principal Officer') return nominations
-  const schemeId = assignedSchemeId(email, users)
-  if (!schemeId) return nominations
-  return nominations.filter((item) => item.schemeId === schemeId)
+  if (role === 'Employee') return []
+  const normalizedEmail = email.trim().toLowerCase()
+  if (role === 'Principal Officer') {
+    const schemeIds = assignedSchemeIds(email, users)
+    return nominations.filter((item) => {
+      if (!schemeIds.includes(item.schemeId)) return false
+      return (
+        item.status !== 'Pending PO' ||
+        !item.endorsement1Email ||
+        item.endorsement1Email.trim().toLowerCase() === normalizedEmail
+      )
+    })
+  }
+  if (role === 'Pension Adminstration') {
+    const schemeIds = assignedSchemeIds(email, users)
+    return nominations.filter(
+      (item) => {
+        if (item.status === 'Tasks' || item.status === 'Submitted') {
+          return true
+        }
+        if (item.status === 'Pending PA') {
+          return (
+            item.endorsement2Email.trim().toLowerCase() === normalizedEmail
+          )
+        }
+        if (!schemeIds.includes(item.schemeId)) return false
+        return (
+          item.status !== 'Pending PO' ||
+          item.endorsement1Email.trim().toLowerCase() === normalizedEmail ||
+          !item.endorsement1Email
+        )
+      },
+    )
+  }
+  return nominations
 }
 
 export function scopedBeneficiaries(

@@ -13,9 +13,19 @@ export const nominationErrorStatuses: NominationErrorStatus[] = [
 ]
 
 export function normalizeNominationErrorStatus(
-  value: string | undefined,
+  value: unknown,
 ): NominationErrorStatus | null {
-  const raw = value?.trim().toLowerCase() ?? ''
+  const raw =
+    typeof value === 'string'
+      ? value.trim().toLowerCase()
+      : value && typeof value === 'object'
+        ? normalizeNominationErrorStatus(
+            (value as Record<string, unknown>).Value ??
+              (value as Record<string, unknown>).value ??
+              (value as Record<string, unknown>).Label ??
+              (value as Record<string, unknown>).label,
+          )?.toLowerCase() ?? ''
+        : ''
   if (!raw) return null
   if (/^(clear|no errors?)$/.test(raw)) return 'Clear'
   if (/missing\s+scheme|scheme\s+(is\s+)?missing/.test(raw)) {
@@ -34,20 +44,27 @@ export function normalizeNominationErrorStatus(
   return null
 }
 
-export function isReadyForPrincipalOfficer(nomination: Nomination): boolean {
-  return (
-    (nomination.status === 'Submitted' || nomination.status === 'Tasks') &&
-    normalizeNominationErrorStatus(nomination.sourceErrors) === 'Clear' &&
-    nomination.errorStatus === 'Clear'
-  )
-}
-
 export function activePrincipalOfficerForScheme(
   users: SystemUser[],
   schemeId: string,
 ): SystemUser | undefined {
-  return users.filter((user) => user.schemeId === schemeId).find(
-    (user) => user.status === 'Active',
+  return (
+    activeUserForRoleAndScheme(users, 'Principal Officer', schemeId) ??
+    activeUserForRoleAndScheme(users, 'Pension Adminstration', schemeId)
+  )
+}
+
+export function activeUserForRoleAndScheme(
+  users: SystemUser[],
+  role: SystemUser['role'],
+  schemeId: string,
+): SystemUser | undefined {
+  if (!schemeId) return undefined
+  return users.find(
+    (user) =>
+      user.role === role &&
+      user.status === 'Active' &&
+      (user.schemeIds.includes(schemeId) || user.schemeId === schemeId),
   )
 }
 
@@ -65,8 +82,13 @@ export function beneficiariesForNomination(
 }
 
 export function applyRecordedErrors(nomination: Nomination): Nomination {
+  const errorStatus = normalizeNominationErrorStatus(nomination.sourceErrors)
   return {
     ...nomination,
-    errorStatus: normalizeNominationErrorStatus(nomination.sourceErrors),
+    errorStatus,
+    status:
+      nomination.status !== 'Rejected' && errorStatus !== 'Clear'
+        ? 'Tasks'
+        : nomination.status,
   }
 }

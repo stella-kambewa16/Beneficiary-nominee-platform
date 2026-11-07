@@ -7,15 +7,6 @@ export function initials(name: string): string {
     .join('')
 }
 
-export function formatCurrency(value: number, decimals = 0): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  }).format(value)
-}
-
 export function formatDate(iso: string): string {
   if (!iso) return '—'
   const date = iso.length === 10 ? new Date(`${iso}T00:00:00`) : new Date(iso)
@@ -40,21 +31,6 @@ export function formatDateTime(iso: string): string {
   })
 }
 
-export function todayLabel(): string {
-  return new Date().toLocaleDateString('en-GB', {
-    weekday: 'short',
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  })
-}
-
 export function nowIso(): string {
   return new Date().toISOString()
-}
-
-export function todayIso(): string {
-  const now = new Date()
-  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
-  return local.toISOString().slice(0, 10)
 }

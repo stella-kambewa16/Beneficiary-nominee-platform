@@ -10,7 +10,10 @@ import {
   NominationStatusBadge,
 } from '../components/Badges'
 import { Drawer } from '../components/Drawer'
+import { Pagination } from '../components/Pagination'
+import { PdfPreview } from '../components/PdfPreview'
 import { useToast } from '../components/toast-context'
+import { usePagination } from '../lib/pagination'
 import { useAuth } from '../auth/auth-context'
 import { downloadCsv } from '../lib/export'
 import { formatDate, initials } from '../lib/format'
@@ -22,6 +25,7 @@ import {
   nominationSchemeName,
 } from '../lib/nominations'
 import { scopedBeneficiaries, scopedNominations } from '../lib/scope'
+import { isPdfDataUri, pdfDataUriToBlob } from '../lib/pdf'
 import type { Nomination, NominationStatus } from '../data/types'
 
 function getSourceFileUrl(value: string): string {
@@ -40,9 +44,20 @@ function getSourceFileUrl(value: string): string {
 
 function getPdfDataUri(value: string): string {
   const dataUri = value.trim()
-  return /^data:application\/pdf(?:;[a-z0-9=+-]+)*,/i.test(dataUri)
-    ? dataUri
-    : ''
+  return isPdfDataUri(dataUri) ? dataUri : ''
+}
+
+function savePdfDataUri(dataUri: string, title: string) {
+  const blob = pdfDataUriToBlob(dataUri)
+  const safeTitle = title.trim().replace(/[\\/:*?"<>|]+/g, '-')
+  const anchor = document.createElement('a')
+  const objectUrl = URL.createObjectURL(blob)
+  anchor.href = objectUrl
+  anchor.download = `${safeTitle || 'nomination'}.pdf`
+  document.body.append(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
 }
 
 export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
@@ -74,11 +89,11 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
   const [rejectError, setRejectError] = useState('')
   const [busy, setBusy] = useState(false)
   const [pdfDocument, setPdfDocument] = useState<{
-    url: string
+    pdfDataUri: string
     sourceUrl: string
     title: string
-    canEmbed: boolean
   } | null>(null)
+  const [pdfReady, setPdfReady] = useState(false)
 
   const visibleNominations = scopedNominations(
     role,
@@ -126,6 +141,7 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
       schemeId === 'All' || nomination.schemeId === schemeId
     return matchesSearch && matchesScheme
   })
+  const pagination = usePagination(filtered.length)
 
   const selected =
     visibleNominations.find((item) => item.id === selectedId) ?? null
@@ -147,7 +163,8 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
     : []
   const canAct = selected
     ? canActOnNomination(role, selected.status) &&
-      selected.errorStatus === 'Clear'
+      selected.errorStatus === 'Clear' &&
+      selected.status !== 'Pending PO'
     : false
   const selectedIsTask = selected ? isTaskNomination(selected) : false
   const lastRejection = selected
@@ -170,7 +187,28 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
     setRejectError('')
   }
 
-  const closePdfViewer = () => setPdfDocument(null)
+  const closePdfViewer = () => {
+    setPdfDocument(null)
+    setPdfReady(false)
+  }
+
+  const handleSavePdf = () => {
+    if (!pdfDocument?.pdfDataUri) return
+    try {
+      savePdfDataUri(pdfDocument.pdfDataUri, pdfDocument.title)
+    } catch (error) {
+      notify(
+        'error',
+        'Could not save PDF',
+        error instanceof Error ? error.message : 'Please try again.',
+      )
+    }
+  }
+
+  const handlePrintPdf = () => {
+    if (!pdfReady) return
+    window.print()
+  }
 
   useEffect(() => {
     if (!pdfDocument) return
@@ -180,14 +218,17 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
         event.preventDefault()
         event.stopImmediatePropagation()
         setPdfDocument(null)
+        setPdfReady(false)
       }
     }
 
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
+    document.body.classList.add('pdf-viewer-open')
     document.addEventListener('keydown', handleKeyDown, true)
     return () => {
       document.body.style.overflow = previousOverflow
+      document.body.classList.remove('pdf-viewer-open')
       document.removeEventListener('keydown', handleKeyDown, true)
     }
   }, [pdfDocument])
@@ -244,11 +285,19 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
         profile.email,
         rejectReason.trim(),
       )
-      notify(
-        'success',
-        'Nomination rejected',
-        `${selected.referenceNumber || selected.memberName} was returned to the member.`,
-      )
+      if (selected.status === 'Pending PA') {
+        notify(
+          'success',
+          'Returned to Principal Officer',
+          `${selected.referenceNumber || selected.memberName} was returned to the Pending PO queue for another review.`,
+        )
+      } else {
+        notify(
+          'success',
+          'Nomination rejected',
+          `${selected.referenceNumber || selected.memberName} was returned to the member.`,
+        )
+      }
       setRejecting(false)
       setRejectReason('')
       setRejectError('')
@@ -268,17 +317,16 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
       notify(
         'info',
         'Supporting document unavailable',
-        `The SharePoint source file URL is missing or invalid for ${
+        `A previewable PDF or valid SharePoint file URL is unavailable for ${
           nomination.referenceNumber || nomination.memberName
         }.`,
       )
       return
     }
     setPdfDocument({
-      url: pdfDataUri || url,
+      pdfDataUri,
       sourceUrl: url,
       title: `Nomination ${nomination.referenceNumber || nomination.id}`,
-      canEmbed: Boolean(pdfDataUri),
     })
   }
 
@@ -358,14 +406,20 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
               className="search-input"
               placeholder="Search reference, member or scheme"
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                setSearch(event.target.value)
+                pagination.setPage(1)
+              }}
               aria-label="Search nominations"
             />
           </div>
           <select
             className="filter-select"
             value={schemeId}
-            onChange={(event) => setSchemeId(event.target.value)}
+            onChange={(event) => {
+              setSchemeId(event.target.value)
+              pagination.setPage(1)
+            }}
             aria-label="Filter by scheme"
           >
             <option value="All">All schemes</option>
@@ -389,7 +443,9 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
               <thead>
                 <tr>
                   <th>Reference Number</th>
-                  <th>Member Number</th>
+                  {queueStatus !== 'Pending PO' ? (
+                    <th>Member Number</th>
+                  ) : null}
                   <th>Member Name</th>
                   <th>Scheme</th>
                   <th>Nominee Count</th>
@@ -397,22 +453,25 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                   <th>Errors</th>
                   <th>First Endorser</th>
                   <th>Second Endorser</th>
-                  <th>Comments</th>
+                  {queueStatus !== 'Pending PO' ? <th>Comments</th> : null}
                   <th>Submission Date</th>
                   <th aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((nomination) => {
+                {filtered.map((nomination, index) => {
                   const actionsAllowed =
                     canActOnNomination(role, nomination.status) &&
-                    nomination.errorStatus === 'Clear'
+                    nomination.errorStatus === 'Clear' &&
+                    nomination.status !== 'Pending PO'
                   const latestComment =
                     commentLines(nomination.comments).at(-1) ?? ''
                   return (
                     <tr
                       key={nomination.id}
-                      className="is-clickable"
+                      className={`is-clickable${
+                        pagination.isVisible(index) ? '' : ' is-page-hidden'
+                      }`}
                       onClick={() => openNomination(nomination.id)}
                     >
                       <td>
@@ -420,12 +479,16 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                           {nomination.referenceNumber || nomination.id}
                         </span>
                       </td>
-                      <td>{nomination.memberNumber}</td>
+                      {queueStatus !== 'Pending PO' ? (
+                        <td>{nomination.memberNumber}</td>
+                      ) : null}
                       <td>
                         <div className="table-holder">
-                          <span className="table-avatar" aria-hidden="true">
-                            {initials(nomination.memberName)}
-                          </span>
+                          {queueStatus !== 'Pending PO' ? (
+                            <span className="table-avatar" aria-hidden="true">
+                              {initials(nomination.memberName)}
+                            </span>
+                          ) : null}
                           <span>
                             <span className="cell-strong">
                               {nomination.memberName}
@@ -446,14 +509,16 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                       </td>
                       <td>{nomination.endorsement1Name || '—'}</td>
                       <td>{nomination.endorsement2Name || '—'}</td>
-                      <td>
-                        <span
-                          className="cell-muted"
-                          title={nomination.comments}
-                        >
-                          {latestComment || '—'}
-                        </span>
-                      </td>
+                      {queueStatus !== 'Pending PO' ? (
+                        <td>
+                          <span
+                            className="cell-muted"
+                            title={nomination.comments}
+                          >
+                            {latestComment || '—'}
+                          </span>
+                        </td>
+                      ) : null}
                       <td>{formatDate(nomination.submissionDate)}</td>
                       <td>
                         <div className="table-actions">
@@ -548,6 +613,7 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                 onClick={() => {
                   setSearch('')
                   setSchemeId('All')
+                  pagination.setPage(1)
                 }}
               >
                 Clear filters
@@ -555,6 +621,16 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
             </div>
           </div>
         )}
+
+        <Pagination
+          page={pagination.page}
+          pageCount={pagination.pageCount}
+          totalItems={filtered.length}
+          start={pagination.start}
+          end={pagination.end}
+          onPageChange={pagination.setPage}
+          itemLabel="nominations"
+        />
       </section>
 
       <Drawer
@@ -850,14 +926,7 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                     type="button"
                     className="button button-primary"
                     onClick={() =>
-                      setPdfDocument({
-                        url: selectedPdfDataUri || selectedSourceFileUrl,
-                        sourceUrl: selectedSourceFileUrl,
-                        title: `Nomination ${
-                          selected.referenceNumber || selected.id
-                        }`,
-                        canEmbed: Boolean(selectedPdfDataUri),
-                      })
+                      viewForm(selected)
                     }
                   >
                     <Icon name="file-text" size={14} />
@@ -948,7 +1017,7 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                   This nomination is waiting for the{' '}
                   {selected.status === 'Pending PO'
                     ? 'Principal Officer'
-                    : 'Pension Administrator'}
+                    : 'Pension Adminstration'}
                   . Switch to a role with the matching approval permission to
                   action it.
                 </span>
@@ -986,35 +1055,22 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                     <Icon name="x" size={16} />
                   </button>
                 </header>
-                {pdfDocument.canEmbed ? (
-                  <iframe
-                    className="pdf-viewer-frame"
-                    src={pdfDocument.url}
-                    title={`PDF review: ${pdfDocument.title}`}
+                {pdfDocument.pdfDataUri ? (
+                  <PdfPreview
+                    key={pdfDocument.title}
+                    dataUri={pdfDocument.pdfDataUri}
+                    onReadyChange={setPdfReady}
                   />
                 ) : (
                   <div className="pdf-viewer-unavailable" role="status">
                     <Icon name="alert-circle" size={22} />
                     <p className="empty-title">
-                      This SharePoint file can’t be previewed in the app yet.
+                      This SharePoint file can’t be embedded in the app.
                     </p>
                     <p>
-                      SharePoint blocks embedding the file URL. An embedded PDF
-                      preview requires the nomination&apos;s PdfDataUri field to
-                      contain the PDF data.
+                      The PDF preview data is unavailable or invalid. Open the
+                      source file in SharePoint to review it.
                     </p>
-                    <a
-                      className="button button-secondary"
-                      href={pdfDocument.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      Open source in new tab
-                    </a>
-                  </div>
-                )}
-                <footer className="pdf-viewer-footer">
-                  {pdfDocument.sourceUrl ? (
                     <a
                       className="button button-secondary"
                       href={pdfDocument.sourceUrl}
@@ -1023,14 +1079,56 @@ export function BeneficiaryNominationsPage({ route }: { route: RouteState }) {
                     >
                       Open source in new tab
                     </a>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="button button-primary"
-                    onClick={closePdfViewer}
-                  >
-                    Done reviewing
-                  </button>
+                  </div>
+                )}
+                <footer className="pdf-viewer-footer">
+                  <div className="pdf-viewer-footer-actions">
+                    {pdfDocument.sourceUrl ? (
+                      <a
+                        className="button button-secondary"
+                        href={pdfDocument.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Open source in new tab
+                      </a>
+                    ) : null}
+                  </div>
+                  <div className="pdf-viewer-footer-actions">
+                    {pdfDocument.pdfDataUri ? (
+                      <>
+                        <button
+                          type="button"
+                          className="button button-secondary"
+                          onClick={handleSavePdf}
+                        >
+                          <Icon name="download" size={15} />
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          className="button button-secondary"
+                          onClick={handlePrintPdf}
+                          disabled={!pdfReady}
+                          title={
+                            pdfReady
+                              ? 'Print this PDF'
+                              : 'Print becomes available when the preview finishes loading'
+                          }
+                        >
+                          <Icon name="printer" size={15} />
+                          Print
+                        </button>
+                      </>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="button button-primary"
+                      onClick={closePdfViewer}
+                    >
+                      Done reviewing
+                    </button>
+                  </div>
                 </footer>
               </section>
             </div>,

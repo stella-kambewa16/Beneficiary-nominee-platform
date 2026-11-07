@@ -1,10 +1,8 @@
 import type {
   NominationErrorStatus,
   NominationStatus,
-  UserRole,
   UserStatus,
 } from '../data/types'
-import { roleLabel } from '../auth/roles'
 
 export function NominationStatusBadge({
   status,
@@ -59,22 +57,6 @@ export function UserStatusBadge({ status }: { status: UserStatus }) {
     <span className={`badge badge-${status === 'Active' ? 'green' : 'slate'}`}>
       <span className="badge-dot" />
       {status}
-    </span>
-  )
-}
-
-export function RoleBadge({ role }: { role: UserRole }) {
-  const tone =
-    role === 'Admin'
-      ? 'green'
-      : role === 'Principal Officer'
-        ? 'blue'
-        : 'amber'
-
-  return (
-    <span className={`badge badge-${tone}`}>
-      <span className="badge-dot" />
-      {roleLabel(role)}
     </span>
   )
 }

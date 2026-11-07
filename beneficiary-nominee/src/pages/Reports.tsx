@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { useData } from '../data/context'
 import { Icon } from '../components/Icon'
+import { Pagination } from '../components/Pagination'
 import { useToast } from '../components/toast-context'
+import { usePagination } from '../lib/pagination'
 import { useAuth } from '../auth/auth-context'
 import { downloadCsv, printReport } from '../lib/export'
 import { formatDate } from '../lib/format'
@@ -399,6 +401,7 @@ export function ReportsPage() {
   }
 
   const table = buildReport()
+  const pagination = usePagination(table.rows.length)
 
   const handleExport = () => {
     downloadCsv(`${reportId}.csv`, table.headers, table.rows)
@@ -418,6 +421,7 @@ export function ReportsPage() {
     setTo('')
     setSchemeId('All')
     setStatus('All')
+    pagination.setPage(1)
   }
 
   return (
@@ -459,7 +463,10 @@ export function ReportsPage() {
               className={`action-card${
                 reportId === report.id ? ' is-active' : ''
               }`}
-              onClick={() => setReportId(report.id)}
+              onClick={() => {
+                setReportId(report.id)
+                pagination.setPage(1)
+              }}
             >
               <span className="action-icon">
                 <Icon name={report.icon} size={17} />
@@ -500,7 +507,10 @@ export function ReportsPage() {
               type="date"
               className="input"
               value={from}
-              onChange={(event) => setFrom(event.target.value)}
+              onChange={(event) => {
+                setFrom(event.target.value)
+                pagination.setPage(1)
+              }}
             />
           </div>
           <div className="field">
@@ -512,7 +522,10 @@ export function ReportsPage() {
               type="date"
               className="input"
               value={to}
-              onChange={(event) => setTo(event.target.value)}
+              onChange={(event) => {
+                setTo(event.target.value)
+                pagination.setPage(1)
+              }}
             />
           </div>
           <div className="field">
@@ -523,7 +536,10 @@ export function ReportsPage() {
               id="report-scheme"
               className="select"
               value={schemeId}
-              onChange={(event) => setSchemeId(event.target.value)}
+              onChange={(event) => {
+                setSchemeId(event.target.value)
+                pagination.setPage(1)
+              }}
             >
               <option value="All">All schemes</option>
               {schemes.map((scheme) => (
@@ -541,9 +557,10 @@ export function ReportsPage() {
               id="report-status"
               className="select"
               value={status}
-              onChange={(event) =>
+              onChange={(event) => {
                 setStatus(event.target.value as StatusFilter)
-              }
+                pagination.setPage(1)
+              }}
             >
               <option value="All">All statuses</option>
               {statuses.map((item) => (
@@ -577,7 +594,12 @@ export function ReportsPage() {
               </thead>
               <tbody>
                 {table.rows.map((row, index) => (
-                  <tr key={`${reportId}-${index}`}>
+                  <tr
+                    key={`${reportId}-${index}`}
+                    className={
+                      pagination.isVisible(index) ? undefined : 'is-page-hidden'
+                    }
+                  >
                     {row.map((cell, cellIndex) => (
                       <td key={`${reportId}-${index}-${cellIndex}`}>
                         {cellIndex === 0 ? (
@@ -614,6 +636,15 @@ export function ReportsPage() {
           </div>
         )}
 
+        <Pagination
+          page={pagination.page}
+          pageCount={pagination.pageCount}
+          totalItems={table.rows.length}
+          start={pagination.start}
+          end={pagination.end}
+          onPageChange={pagination.setPage}
+          itemLabel="rows"
+        />
       </section>
     </div>
   )

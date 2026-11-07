@@ -407,8 +407,40 @@
           },
           "maxLength": 255
         },
+        "errors": {
+          "title": "errors",
+          "type": "string",
+          "x-ms-permission": "read-write",
+          "x-ms-sort": "asc,desc",
+          "x-ms-capabilities": {
+            "filterFunctions": [
+              "eq",
+              "startswith"
+            ]
+          },
+          "maxLength": 255
+        },
+        "comments": {
+          "title": "comments",
+          "type": "string",
+          "x-ms-permission": "read-write",
+          "x-ms-sort": "none"
+        },
         "OData__x0031_stEndorseName": {
           "title": "1stEndorseName",
+          "type": "string",
+          "x-ms-permission": "read-write",
+          "x-ms-sort": "asc,desc",
+          "x-ms-capabilities": {
+            "filterFunctions": [
+              "eq",
+              "startswith"
+            ]
+          },
+          "maxLength": 255
+        },
+        "OData__x0031_stEndorserEmail": {
+          "title": "1stEndorserEmail",
           "type": "string",
           "x-ms-permission": "read-write",
           "x-ms-sort": "asc,desc",
@@ -978,6 +1010,9 @@
           "PdfDataUri",
           "refNumber",
           "endorseStatus",
+          "errors",
+          "comments",
+          "OData__x0031_stEndorserEmail",
           "OData__x0031_stEndorsementEmail",
           "OData__x0031_stEndorseName",
           "OData__x0032_ndEndorseEmail",

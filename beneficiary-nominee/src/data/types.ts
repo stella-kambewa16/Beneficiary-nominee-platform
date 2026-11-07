@@ -12,12 +12,16 @@ export type NominationErrorStatus =
   | 'Missing Information'
   | 'Clear'
 
-export type UserRole = 'Admin' | 'Principal Officer' | 'Pension Manager'
+export type UserRole =
+  | 'Employee'
+  | 'Principal Officer'
+  | 'Pension Adminstration'
+  | 'Adminstration'
 
 export type UserStatus = 'Active' | 'Disabled'
 export type SchemeStatus = 'Active' | 'Disabled'
 
-export type ApprovalDecision = 'Submitted' | 'Endorsed' | 'Approved' | 'Rejected'
+type ApprovalDecision = 'Submitted' | 'Endorsed' | 'Approved' | 'Rejected'
 
 export type Relationship = string
 
@@ -36,12 +40,12 @@ export interface SystemUser {
   name: string
   email: string
   phone: string
-  /** Every record in principalOfficers is treated as a Principal Officer. */
-  role: 'Principal Officer'
+  role: UserRole
   status: UserStatus
   /** Raw value read from the SharePoint `status` column. */
   sourceStatus: string
   schemeId: string | null
+  schemeIds: string[]
   schemeCode: string
   schemeName: string
   createdDate: string
@@ -65,6 +69,9 @@ export interface Nomination {
   memberDob: string
   branchCode: string
   costCentre: string
+  homeTelephone: string
+  cellTelephone: string
+  workTelephone: string
   email: string
   schemeId: string
   schemeName: string
@@ -127,8 +134,9 @@ export interface UserDraft {
   name: string
   email: string
   phone: string
+  role: UserRole
   status: UserStatus
-  schemeId: string | null
+  schemeIds: string[]
 }
 
 /** Fields operations can correct while a nomination is in the Tasks queue. */
@@ -137,6 +145,11 @@ export interface NominationCorrection {
   memberNumber?: string
   memberName?: string
   memberDob?: string
+  branchCode?: string
+  costCentre?: string
+  homeTelephone?: string
+  cellTelephone?: string
+  workTelephone?: string
   email?: string
 }
 

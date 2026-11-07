@@ -23,6 +23,10 @@ export interface EditorValue {
   JobTitle: string;
 }
 
+export interface PrincipalOfficersRoleChoice {
+  Value: string;
+}
+
 export interface PrincipalOfficersBase {
   ID?: number;
   Title?: string;
@@ -34,6 +38,7 @@ export interface PrincipalOfficersBase {
   postaladdress?: string;
   schemecode?: string;
   schemename?: string;
+  PrincipalOfficersRole?: string | PrincipalOfficersRoleChoice;
   OData__ColorTag?: string;
   ComplianceAssetId?: string;
   Modified?: string;

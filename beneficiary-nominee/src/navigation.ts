@@ -12,17 +12,23 @@ export interface NavItem {
   roles: Role[]
 }
 
-const allRoles: Role[] = ['Admin', 'Principal Officer', 'Pension Manager']
-const adminOnly: Role[] = ['Admin']
+const allRoles: Role[] = [
+  'Principal Officer',
+  'Pension Adminstration',
+  'Adminstration',
+]
+const everyone: Role[] = [...allRoles, 'Employee']
+const adminOnly: Role[] = ['Adminstration']
+const taskRoles: Role[] = ['Pension Adminstration', 'Adminstration']
 
-export const navItems: NavItem[] = [
+const navItems: NavItem[] = [
   {
     path: '/',
     label: 'Dashboard',
     subtitle: 'System KPIs, recent nominations and activity.',
     icon: 'grid',
     section: 'Workspace',
-    roles: allRoles,
+    roles: everyone,
   },
   {
     path: '/tasks',
@@ -30,7 +36,7 @@ export const navItems: NavItem[] = [
     subtitle: 'Validate and correct nominations before endorsement.',
     icon: 'file-check',
     section: 'Workspace',
-    roles: adminOnly,
+    roles: taskRoles,
   },
   {
     path: '/pending-po',
@@ -46,7 +52,7 @@ export const navItems: NavItem[] = [
     subtitle: 'Nominations waiting for Pension Administrator endorsement.',
     icon: 'file-check',
     section: 'Workspace',
-    roles: allRoles,
+    roles: taskRoles,
   },
   {
     path: '/nominations',

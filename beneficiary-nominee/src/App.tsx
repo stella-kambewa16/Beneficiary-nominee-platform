@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import type { ReactNode } from 'react'
 import { Layout } from './components/Layout'
 import { AccessDenied } from './components/AccessDenied'
 import { ToastProvider } from './components/Toast'
@@ -10,6 +11,7 @@ import { findNavItem } from './navigation'
 import { navigate, useRoute } from './router'
 import type { RouteState } from './router'
 import { DashboardPage } from './pages/Dashboard'
+import { Icon } from './components/Icon'
 import { TasksPage } from './pages/Tasks'
 import { BeneficiaryNominationsPage } from './pages/BeneficiaryNominations'
 import { BeneficiariesPage } from './pages/Beneficiaries'
@@ -32,7 +34,7 @@ function CurrentPage({ route }: { route: RouteState }) {
     case '/pending-po':
     case '/pending-pa':
     case '/nominations':
-      return <BeneficiaryNominationsPage route={route} />
+      return <BeneficiaryNominationsPage key={route.path} route={route} />
     case '/beneficiaries':
       return <BeneficiariesPage />
     case '/reports':
@@ -45,6 +47,49 @@ function CurrentPage({ route }: { route: RouteState }) {
     default:
       return <DashboardPage />
   }
+}
+
+function AuthGate({ children }: { children: ReactNode }) {
+  const { status, error, retry } = useAuth()
+
+  if (status === 'ready') return <>{children}</>
+
+  const failed = status === 'error'
+
+  return (
+    <div className="page-stack" style={{ padding: '48px 24px' }}>
+      <section className="access-denied" role={failed ? 'alert' : 'status'}>
+        <span className="access-denied-icon">
+          <Icon name={failed ? 'alert-circle' : 'refresh'} size={26} />
+        </span>
+        <span className="hero-eyebrow">
+          <Icon name="shield" size={13} />
+          {failed ? 'Sign-in required' : 'Checking access'}
+        </span>
+        <h1 className="hero-title">
+          {failed ? 'Unable to verify your identity' : 'Loading your workspace'}
+        </h1>
+        <p className="hero-text">
+          {failed
+            ? error ??
+              'The app could not confirm your Microsoft 365 identity or workflow role.'
+            : 'Confirming your signed-in Microsoft 365 account and reading your role from SharePoint.'}
+        </p>
+        {failed ? (
+          <div className="access-denied-actions">
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={retry}
+            >
+              <Icon name="refresh" size={15} />
+              Try again
+            </button>
+          </div>
+        ) : null}
+      </section>
+    </div>
+  )
 }
 
 function Shell() {
@@ -77,7 +122,9 @@ export default function App() {
     <ToastProvider>
       <AuthProvider>
         <DataProvider>
-          <Shell />
+          <AuthGate>
+            <Shell />
+          </AuthGate>
         </DataProvider>
       </AuthProvider>
     </ToastProvider>

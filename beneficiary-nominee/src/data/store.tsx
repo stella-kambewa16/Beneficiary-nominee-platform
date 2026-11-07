@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { DataContext } from './context'
 import { demoSnapshot } from './demo'
 import {
-  assignOfficerScheme,
+  assignOfficerSchemes,
   createOfficerRecord,
   createSchemeRecord,
   fetchSharePointSnapshot,
@@ -37,14 +37,21 @@ import type {
   UserRole,
   UserStatus,
 } from './types'
-import { pensionAdministrator } from '../auth/roles'
-import { appendComment, appendSystemComment } from '../lib/comments'
+import { appendComment } from '../lib/comments'
 import { nowIso } from '../lib/format'
 import {
+  activeUserForRoleAndScheme,
   activePrincipalOfficerForScheme,
   applyRecordedErrors,
-  isReadyForPrincipalOfficer,
 } from '../lib/validation'
+import {
+  prepareNominationStageEmail,
+  sendNominationStageEmail,
+} from '../lib/nomination-notifications'
+import { userHasScheme } from '../lib/nominations'
+import { useAuth } from '../auth/auth-context'
+import { hasPermission } from '../auth/roles'
+import type { Permission } from '../auth/roles'
 
 interface Snapshot {
   schemes: Scheme[]
@@ -93,19 +100,57 @@ function describeLoadError(error: unknown): string {
   return message
 }
 
+/**
+ * Mutations are authorised from the provider's resolved role, not from the
+ * role string a caller passes in for display or audit purposes.
+ */
+function requirePermission(
+  role: UserRole,
+  permission: Permission,
+  message: string,
+): void {
+  if (!hasPermission(role, permission)) throw new Error(message)
+}
+
+function requireAuthenticatedActor(
+  suppliedRole: UserRole,
+  suppliedActor: string,
+  role: UserRole,
+  user: { name: string; email: string },
+  suppliedEmail?: string,
+): void {
+  const identity = user.name || user.email
+  if (
+    suppliedRole !== role ||
+    suppliedActor.trim().toLowerCase() !== identity.trim().toLowerCase() ||
+    (suppliedEmail !== undefined &&
+      suppliedEmail.trim().toLowerCase() !== user.email.trim().toLowerCase())
+  ) {
+    throw new Error('The action does not match the signed-in user context.')
+  }
+}
+
+function activeAdminCount(users: SystemUser[]): number {
+  return users.filter(
+    (user) => user.role === 'Adminstration' && user.status === 'Active',
+  ).length
+}
+
 function decisionStage(
   role: UserRole,
   status: NominationStatus,
 ): DecisionStage | null {
   if (
     status === 'Pending PO' &&
-    (role === 'Principal Officer' || role === 'Admin')
+    (role === 'Principal Officer' ||
+      role === 'Pension Adminstration' ||
+      role === 'Adminstration')
   ) {
     return 'PO'
   }
   if (
     status === 'Pending PA' &&
-    (role === 'Pension Manager' || role === 'Admin')
+    (role === 'Pension Adminstration' || role === 'Adminstration')
   ) {
     return 'PA'
   }
@@ -122,9 +167,7 @@ function stageMessage(role: UserRole, status: NominationStatus): string {
   if (status === 'Pending PO') {
     return 'This nomination is awaiting Principal Officer endorsement.'
   }
-  return role === 'Principal Officer'
-    ? 'This nomination is awaiting Pension Administrator approval.'
-    : 'This nomination is awaiting Pension Administrator approval.'
+  return `This nomination is awaiting Pension Administrator approval, not ${role}.`
 }
 
 function requireClear(
@@ -137,6 +180,64 @@ function requireClear(
   }
 }
 
+function requireTaskEditAccess(
+  nomination: Nomination,
+  role: UserRole,
+): void {
+  if (role !== 'Pension Adminstration' && role !== 'Adminstration') {
+    throw new Error('Only Pension Adminstration can edit task details.')
+  }
+  if (nomination.status !== 'Tasks' && nomination.status !== 'Submitted') {
+    throw new Error('Only nominations in the Tasks queue can be edited here.')
+  }
+}
+
+function requireAssignedStageAccess(
+  nomination: Nomination,
+  stage: DecisionStage,
+  role: UserRole,
+  email: string,
+  users: SystemUser[],
+): void {
+  if (role === 'Adminstration') return
+
+  const normalizedEmail = email.trim().toLowerCase()
+  if (!normalizedEmail) {
+    throw new Error('The signed-in email is unavailable for endorsement.')
+  }
+
+  if (stage === 'PA') {
+    if (
+      nomination.endorsement2Email.trim().toLowerCase() !== normalizedEmail
+    ) {
+      throw new Error(
+        'Only the Pension Administrator assigned as Second Endorser can act on this nomination.',
+      )
+    }
+    return
+  }
+
+  const assignedEmail = nomination.endorsement1Email.trim().toLowerCase()
+  if (assignedEmail) {
+    if (assignedEmail !== normalizedEmail) {
+      throw new Error(
+        'Only the Pension Officer assigned as First Endorser can act on this nomination.',
+      )
+    }
+    return
+  }
+
+  const assignedOfficer = activePrincipalOfficerForScheme(
+    users,
+    nomination.schemeId,
+  )
+  if (assignedOfficer?.email.trim().toLowerCase() !== normalizedEmail) {
+    throw new Error(
+      'Only the active Pension Officer assigned to this scheme can act on this nomination.',
+    )
+  }
+}
+
 function withDemoDecision(
   nomination: Nomination,
   status: NominationStatus,
@@ -145,12 +246,16 @@ function withDemoDecision(
   actorEmail: string,
   role: UserRole,
   comment: string,
+  secondEndorser?: { name: string; email: string },
 ): Nomination {
   const timestamp = nowIso()
+  const wasRejected =
+    status === 'Rejected' || (stage === 'PA' && status === 'Pending PO')
   const next = {
     ...nomination,
     status,
     sourceStatus: status,
+    warnings: wasRejected ? comment : nomination.warnings,
     comments: appendComment(nomination.comments, actor, role, comment),
     approvalHistory: [
       ...nomination.approvalHistory,
@@ -158,7 +263,11 @@ function withDemoDecision(
         id: `DEMO-EVENT-${Date.now()}`,
         stage: stage === 'PO' ? 'Principal Officer' : 'Pension Administrator',
         actor,
-        decision: stage === 'PO' ? 'Endorsed' as const : 'Approved' as const,
+        decision: wasRejected
+          ? 'Rejected' as const
+          : stage === 'PO'
+            ? 'Endorsed' as const
+            : 'Approved' as const,
         date: timestamp.slice(0, 10),
         comments: comment,
       },
@@ -171,10 +280,12 @@ function withDemoDecision(
         endorsement1Name: actor,
         endorsement1Email: actorEmail,
         ...(status === 'Pending PA'
-          ? {
-              endorsement2Name: pensionAdministrator().name,
-              endorsement2Email: pensionAdministrator().email,
-            }
+          ? secondEndorser
+            ? {
+                endorsement2Name: secondEndorser.name,
+                endorsement2Email: secondEndorser.email,
+              }
+            : {}
           : {}),
       }
     : {
@@ -185,6 +296,7 @@ function withDemoDecision(
 }
 
 export function DataProvider({ children }: { children: ReactNode }) {
+  const { role: authRole, user: authUser } = useAuth()
   const demoMode = new URLSearchParams(
     window.location.hash.split('?')[1] ?? '',
   ).get('demo') === 'seed'
@@ -212,48 +324,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
         mapUser(record, schemes),
       )
       const beneficiaries = raw.nomineeRecords.map(mapBeneficiary)
-      let nominations = raw.nominationRecords.map((record) =>
+      const nominations = raw.nominationRecords.map((record) =>
         mapNomination(record, schemes, users, beneficiaries),
       )
 
-      const promotionFailures: string[] = []
-      for (const nomination of nominations) {
-        if (!isReadyForPrincipalOfficer(nomination)) continue
-
-        const officer = activePrincipalOfficerForScheme(users, nomination.schemeId)
-        if (!officer) continue
-
-        try {
-          const updated = await writeNominationValidation(nomination.id, {
-            status: 'Pending PO',
-            errors: 'Clear',
-            comments: appendSystemComment(
-              nomination.comments,
-              `Validation passed. Moved to Pending PO and assigned ${officer.name} as First Endorser.`,
-            ),
-            firstEndorser: { name: officer.name, email: officer.email },
-          })
-          const mapped = mapNomination(updated, schemes, users, beneficiaries)
-          nominations = nominations.map((item) =>
-            item.id === mapped.id ? mapped : item,
-          )
-        } catch (promotionError) {
-          promotionFailures.push(
-            `${nomination.referenceNumber || `Nomination ${nomination.id}`}: ${
-              promotionError instanceof Error
-                ? promotionError.message
-                : 'automatic promotion failed'
-            }`,
-          )
-        }
-      }
-
       setSnapshot({ schemes, users, nominations, beneficiaries })
-      setError(
-        promotionFailures.length
-          ? `SharePoint data loaded, but automatic promotion failed for ${promotionFailures.join('; ')}.`
-          : null,
-      )
+      setError(null)
     } catch (loadError) {
       setError(describeLoadError(loadError))
     } finally {
@@ -341,43 +417,93 @@ export function DataProvider({ children }: { children: ReactNode }) {
       if (!nomination) {
         throw new Error('The selected nomination could not be found.')
       }
+      requireAuthenticatedActor(role, actor, authRole, authUser, actorEmail)
 
-      const stage = decisionStage(role, nomination.status)
+      const stage = decisionStage(authRole, nomination.status)
       if (!stage) {
-        throw new Error(stageMessage(role, nomination.status))
+        throw new Error(stageMessage(authRole, nomination.status))
       }
+      requirePermission(
+        authRole,
+        stage === 'PO' ? 'nominations:approve:po' : 'nominations:approve:pa',
+        'Your role cannot endorse nominations at this stage.',
+      )
       requireClear(nomination)
+      requireAssignedStageAccess(
+        nomination,
+        stage,
+        authRole,
+        authUser.email,
+        snapshot.users,
+      )
 
       const nextStatus: NominationStatus =
         stage === 'PO' ? 'Pending PA' : 'Approved'
       const comment =
         comments.trim() ||
         (stage === 'PO'
-          ? 'Endorsed and forwarded to the Pension Administrator.'
-          : 'Final approval granted.')
+          ? 'Principal Officer endorsed the nomination.'
+          : 'Pension Administrator approved the nomination.')
+      const secondEndorser =
+        stage === 'PO'
+          ? activeUserForRoleAndScheme(
+              snapshot.users,
+              'Pension Adminstration',
+              nomination.schemeId,
+            ) ??
+            (demoMode
+              ? snapshot.users.find(
+                  (user) =>
+                    user.role === 'Pension Adminstration' &&
+                    user.status === 'Active' &&
+                    user.email.trim().toLowerCase() !==
+                      authUser.email.trim().toLowerCase(),
+                )
+              : undefined)
+          : undefined
+      if (stage === 'PO' && !secondEndorser) {
+        throw new Error(
+          'Assign an active Pension Adminstration user to this scheme before endorsing nominations.',
+        )
+      }
+      const stageEmail =
+        stage === 'PO' && secondEndorser && !demoMode
+          ? prepareNominationStageEmail(
+              'PA',
+              nomination,
+              secondEndorser,
+              snapshot.users,
+            )
+          : null
 
       const mapped = demoMode
         ? withDemoDecision(
             nomination,
             nextStatus,
             stage,
-            actor,
-            actorEmail,
-            role,
+            authUser.name || authUser.email,
+            authUser.email,
+            authRole,
             comment,
+            secondEndorser,
           )
         : mapNomination(
             await writeNominationDecision(nomination.id, {
               status: nextStatus,
               stage,
-              actor,
-              actorEmail,
-              actorRole: role,
+              actor: authUser.name || authUser.email,
+              actorEmail: authUser.email,
+              actorRole: authRole,
               comment,
               previousComments: nomination.comments,
               errors: nomination.errorStatus,
               secondEndorser:
-                stage === 'PO' ? pensionAdministrator() : undefined,
+                secondEndorser
+                  ? {
+                      name: secondEndorser.name,
+                      email: secondEndorser.email,
+                    }
+                  : undefined,
             }),
             snapshot.schemes,
             snapshot.users,
@@ -399,13 +525,28 @@ export function DataProvider({ children }: { children: ReactNode }) {
         subject: nomination.memberName,
         detail: `${
           nomination.referenceNumber || `Nomination ${nomination.id}`
-        } was ${stage === 'PO' ? 'endorsed' : 'approved'} by ${actor}.`,
-        actor,
+        } was ${stage === 'PO' ? 'endorsed' : 'approved'} by ${
+          authUser.name || authUser.email
+        }.`,
+        actor: authUser.name || authUser.email,
         referenceNumber: nomination.referenceNumber,
         nominationId: nomination.id,
       })
+      if (stageEmail) {
+        try {
+          await sendNominationStageEmail(stageEmail)
+        } catch (error) {
+          const detail =
+            error instanceof Error ? error.message : 'Unknown Outlook error.'
+          throw new Error(
+            `The nomination moved to ${nextStatus}, but its email notification could not be sent: ${detail}`,
+          )
+        }
+      }
     },
     [
+      authRole,
+      authUser,
       snapshot.beneficiaries,
       snapshot.nominations,
       snapshot.schemes,
@@ -429,32 +570,51 @@ export function DataProvider({ children }: { children: ReactNode }) {
       if (!nomination) {
         throw new Error('The selected nomination could not be found.')
       }
+      requireAuthenticatedActor(role, actor, authRole, authUser, actorEmail)
       if (!reason.trim()) {
         throw new Error('A rejection reason is required.')
       }
 
-      const stage = decisionStage(role, nomination.status)
+      const stage = decisionStage(authRole, nomination.status)
       if (!stage) {
-        throw new Error(stageMessage(role, nomination.status))
+        throw new Error(stageMessage(authRole, nomination.status))
       }
+      requirePermission(
+        authRole,
+        'nominations:reject',
+        'Your role cannot reject nominations.',
+      )
+      requireClear(nomination)
+      requireAssignedStageAccess(
+        nomination,
+        stage,
+        authRole,
+        authUser.email,
+        snapshot.users,
+      )
 
+      const returnedToPO = stage === 'PA'
+      const nextStatus: NominationStatus = returnedToPO
+        ? 'Pending PO'
+        : 'Rejected'
       const mapped = demoMode
         ? withDemoDecision(
             nomination,
-            'Rejected',
+            nextStatus,
             stage,
-            actor,
-            actorEmail,
-            role,
+            authUser.name || authUser.email,
+            authUser.email,
+            authRole,
             reason.trim(),
           )
         : mapNomination(
             await writeNominationDecision(nomination.id, {
-              status: 'Rejected',
+              status: nextStatus,
+              rejection: true,
               stage,
-              actor,
-              actorEmail,
-              actorRole: role,
+              actor: authUser.name || authUser.email,
+              actorEmail: authUser.email,
+              actorRole: authRole,
               comment: reason.trim(),
               previousComments: nomination.comments,
               errors: nomination.errorStatus,
@@ -472,17 +632,27 @@ export function DataProvider({ children }: { children: ReactNode }) {
       }))
 
       pushActivity({
-        action: 'Nomination rejected',
+        action: returnedToPO
+          ? 'PA rejection returned to PO'
+          : 'Nomination rejected',
         subject: nomination.memberName,
-        detail: `${
-          nomination.referenceNumber || `Nomination ${nomination.id}`
-        } was rejected by ${actor}: ${reason.trim()}`,
-        actor,
+        detail: returnedToPO
+          ? `${
+              nomination.referenceNumber || `Nomination ${nomination.id}`
+            } was returned to Principal Officer review by ${
+              authUser.name || authUser.email
+            }: ${reason.trim()}`
+          : `${
+              nomination.referenceNumber || `Nomination ${nomination.id}`
+            } was rejected by ${authUser.name || authUser.email}: ${reason.trim()}`,
+        actor: authUser.name || authUser.email,
         referenceNumber: nomination.referenceNumber,
         nominationId: nomination.id,
       })
     },
     [
+      authRole,
+      authUser,
       snapshot.beneficiaries,
       snapshot.nominations,
       snapshot.schemes,
@@ -505,14 +675,31 @@ export function DataProvider({ children }: { children: ReactNode }) {
       if (!nomination) {
         throw new Error('The selected nomination could not be found.')
       }
+      requireAuthenticatedActor(role, actor, authRole, authUser)
+      requirePermission(
+        authRole,
+        'tasks:manage',
+        'Only Pension Adminstration or Adminstration can review the Errors column and move a nomination to Pending PO.',
+      )
+      if (
+        errors === 'Clear' &&
+        nomination.status !== 'Tasks' &&
+        nomination.status !== 'Submitted'
+      ) {
+        throw new Error(
+          'Only nominations in the Tasks queue can be promoted to Pending PO.',
+        )
+      }
 
       let nextStatus: NominationStatus = nomination.status
-      let firstEndorser: { name: string; email: string } | undefined
+      let firstEndorser: SystemUser | undefined
 
-      if (errors !== 'Clear') {
-        if (nomination.status === 'Pending PO' || nomination.status === 'Pending PA') {
-          nextStatus = 'Tasks'
-        }
+      if (
+        errors !== 'Clear' &&
+        (nomination.status === 'Pending PO' ||
+          nomination.status === 'Pending PA')
+      ) {
+        nextStatus = 'Tasks'
       } else if (
         nomination.status === 'Tasks' ||
         nomination.status === 'Submitted'
@@ -521,27 +708,47 @@ export function DataProvider({ children }: { children: ReactNode }) {
           (item) => item.id === nomination.schemeId,
         )
         const officer = scheme
-          ? activePrincipalOfficerForScheme(snapshot.users, scheme.id)
+          ? demoMode
+            ? activePrincipalOfficerForScheme(snapshot.users, scheme.id)
+            : activeUserForRoleAndScheme(
+                snapshot.users,
+                'Principal Officer',
+                scheme.id,
+              )
           : undefined
         if (!officer) {
           throw new Error(
-            'A Principal Officer must be assigned to the scheme before this nomination can be promoted.',
+            'An active Principal Officer must be assigned to this scheme before this nomination can be promoted.',
           )
         }
         nextStatus = 'Pending PO'
-        firstEndorser = { name: officer.name, email: officer.email }
+        firstEndorser = officer
       }
 
       const promoted = nextStatus === 'Pending PO' && nomination.status !== 'Pending PO'
+      const stageEmail =
+        promoted && firstEndorser && !demoMode
+          ? prepareNominationStageEmail(
+              'PO',
+              nomination,
+              firstEndorser,
+              snapshot.users,
+            )
+          : null
       const message = errors === 'Clear'
         ? promoted
           ? `Errors column set to Clear. Moved to Pending PO and assigned ${
-              firstEndorser?.name ?? 'the Principal Officer'
+              firstEndorser?.name ?? 'Pension Adminstration'
             } as First Endorser.`
           : 'Errors column updated to Clear.'
         : `Errors column updated to "${errors}". The nomination remains in Tasks.`
 
-      const comments = appendComment(nomination.comments, actor, role, message)
+      const comments = appendComment(
+        nomination.comments,
+        authUser.name || authUser.email,
+        authRole,
+        message,
+      )
       const mapped = demoMode
         ? {
             ...nomination,
@@ -562,7 +769,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
               status: nextStatus,
               errors,
               comments,
-              firstEndorser,
+              firstEndorser: firstEndorser
+                ? {
+                    name: firstEndorser.name,
+                    email: firstEndorser.email,
+                  }
+                : undefined,
             }),
             snapshot.schemes,
             snapshot.users,
@@ -582,14 +794,28 @@ export function DataProvider({ children }: { children: ReactNode }) {
         detail: `${
           nomination.referenceNumber || `Nomination ${nomination.id}`
         }: ${message}`,
-        actor,
+        actor: authUser.name || authUser.email,
         referenceNumber: nomination.referenceNumber,
         nominationId: nomination.id,
       })
 
+      if (stageEmail) {
+        try {
+          await sendNominationStageEmail(stageEmail)
+        } catch (error) {
+          const detail =
+            error instanceof Error ? error.message : 'Unknown Outlook error.'
+          throw new Error(
+            `The nomination moved to ${nextStatus}, but its email notification could not be sent: ${detail}`,
+          )
+        }
+      }
+
       return errors
     },
     [
+      authRole,
+      authUser,
       snapshot.beneficiaries,
       snapshot.nominations,
       snapshot.schemes,
@@ -612,11 +838,23 @@ export function DataProvider({ children }: { children: ReactNode }) {
       if (!nomination) {
         throw new Error('The selected nomination could not be found.')
       }
+      requireAuthenticatedActor(role, actor, authRole, authUser)
+      requirePermission(
+        authRole,
+        'tasks:manage',
+        'Only Pension Adminstration or Adminstration can add validation comments.',
+      )
+      requireTaskEditAccess(nomination, authRole)
       if (!comment.trim()) {
         throw new Error('Enter a comment before saving.')
       }
 
-      const comments = appendComment(nomination.comments, actor, role, comment)
+      const comments = appendComment(
+        nomination.comments,
+        authUser.name || authUser.email,
+        authRole,
+        comment,
+      )
       const mapped = demoMode
         ? { ...nomination, comments }
         : mapNomination(
@@ -634,13 +872,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
       pushActivity({
         action: 'Nomination comment added',
         subject: nomination.memberName,
-        detail: `${nomination.referenceNumber || `Nomination ${nomination.id}`} received a Tasks comment from ${actor}.`,
-        actor,
+        detail: `${nomination.referenceNumber || `Nomination ${nomination.id}`} received a Tasks comment from ${authUser.name || authUser.email}.`,
+        actor: authUser.name || authUser.email,
         referenceNumber: nomination.referenceNumber,
         nominationId: nomination.id,
       })
     },
     [
+      authRole,
+      authUser,
       snapshot.beneficiaries,
       snapshot.nominations,
       snapshot.schemes,
@@ -663,14 +903,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
       if (!nomination) {
         throw new Error('The selected nomination could not be found.')
       }
+      requireAuthenticatedActor(role, actor, authRole, authUser)
+      requireTaskEditAccess(nomination, authRole)
 
       const changedFields = Object.entries(correction)
         .filter(([, value]) => value !== undefined)
         .map(([key]) => key)
+      if (changedFields.length === 0) {
+        throw new Error('Change at least one nomination field before saving.')
+      }
       const comment = appendComment(
         nomination.comments,
-        actor,
-        role,
+        authUser.name || authUser.email,
+        authRole,
         `Corrected nomination details (${changedFields.join(', ') || 'no fields'}).`,
       )
 
@@ -712,12 +957,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
         detail: `${
           nomination.referenceNumber || `Nomination ${nomination.id}`
         } was corrected in Tasks.`,
-        actor,
+        actor: authUser.name || authUser.email,
         referenceNumber: nomination.referenceNumber,
         nominationId: nomination.id,
       })
     },
     [
+      authRole,
+      authUser,
       snapshot.beneficiaries,
       snapshot.nominations,
       snapshot.schemes,
@@ -740,6 +987,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       if (!existing) {
         throw new Error('The selected beneficiary could not be found.')
       }
+      requireAuthenticatedActor(role, actor, authRole, authUser)
 
       const parent = snapshot.nominations.find(
         (nomination) =>
@@ -748,9 +996,18 @@ export function DataProvider({ children }: { children: ReactNode }) {
           (existing.memberItemId !== null &&
             String(existing.memberItemId) === nomination.id),
       )
+      if (!parent) {
+        throw new Error(
+          'This beneficiary is not linked to a nomination in the Tasks queue.',
+        )
+      }
+      requireTaskEditAccess(parent, authRole)
       const changedFields = Object.entries(correction)
         .filter(([, value]) => value !== undefined)
         .map(([key]) => key)
+      if (changedFields.length === 0) {
+        throw new Error('Change at least one beneficiary field before saving.')
+      }
 
       const mapped = demoMode
         ? { ...existing, ...correction }
@@ -761,8 +1018,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
               ...parent,
               comments: appendComment(
                 parent.comments,
-                actor,
-                role,
+                authUser.name || authUser.email,
+                authRole,
                 `Corrected beneficiary ${
                   existing.title || existing.id
                 } (${changedFields.join(', ') || 'no fields'}).`,
@@ -773,8 +1030,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 parent.id,
                 appendComment(
                   parent.comments,
-                  actor,
-                  role,
+                  authUser.name || authUser.email,
+                  authRole,
                   `Corrected beneficiary ${
                     existing.title || existing.id
                   } (${changedFields.join(', ') || 'no fields'}).`,
@@ -804,11 +1061,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
         action: 'Beneficiary details updated',
         subject: existing.title || `Beneficiary ${existing.id}`,
         detail: `Beneficiary ${existing.refNumber || existing.id} was corrected in Tasks.`,
-        actor,
+        actor: authUser.name || authUser.email,
         referenceNumber: existing.refNumber,
       })
     },
     [
+      authRole,
+      authUser,
       snapshot.beneficiaries,
       snapshot.nominations,
       snapshot.schemes,
@@ -820,23 +1079,36 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   const createUser = useCallback(
     async (draft: UserDraft, actor: string) => {
+      requirePermission(
+        authRole,
+        'users:manage',
+        'Only Adminstration can create principal officer accounts.',
+      )
       const name = draft.name.trim()
       const email = draft.email.trim()
-      if (!name) throw new Error('Enter the principal officer name.')
-      if (!email) throw new Error('Enter the principal officer email address.')
+      if (!name) throw new Error('Enter the user name.')
+      if (!email) throw new Error('Enter the user email address.')
 
-      const scheme = draft.schemeId
-        ? (snapshot.schemes.find((item) => item.id === draft.schemeId) ?? null)
-        : null
+      const schemeIds = [...new Set(draft.schemeIds)]
+      const schemes = schemeIds.map((id) =>
+        snapshot.schemes.find((item) => item.id === id),
+      )
+      if (schemes.some((scheme) => !scheme)) {
+        throw new Error('One or more selected schemes could not be found.')
+      }
+      const assignedSchemes = schemes.filter(
+        (scheme): scheme is Scheme => Boolean(scheme),
+      )
 
       const created = await createOfficerRecord({
         name,
         email,
         phone: draft.phone.trim(),
+        role: draft.role,
         status: draft.status,
-        scheme,
+        schemes: assignedSchemes,
       })
-      const mapped = mapUser(created, snapshot.schemes)
+      const mapped = mapUser(created.record, snapshot.schemes)
 
       setSnapshot((current) => ({
         ...current,
@@ -844,40 +1116,73 @@ export function DataProvider({ children }: { children: ReactNode }) {
       }))
 
       pushActivity({
-        action: 'Principal officer created',
+        action: 'User created',
         subject: name,
-        detail: `${name} was added${scheme ? ` for ${scheme.name}` : ''}.`,
+        detail: `${name} was added${
+          assignedSchemes.length
+            ? ` for ${assignedSchemes.map((scheme) => scheme.name).join(', ')}`
+            : ''
+        }.${
+          created.rolesSaved
+            ? ''
+            : ' The SharePoint PrincipalOfficersRole column did not save the workflow role.'
+        }`,
         actor,
         referenceNumber: '',
       })
+
+      return { rolesSaved: created.rolesSaved }
     },
-    [snapshot.schemes, pushActivity],
+    [authRole, snapshot.schemes, pushActivity],
   )
 
   const updateUser = useCallback(
     async (id: string, draft: UserDraft, actor: string) => {
+      requirePermission(
+        authRole,
+        'users:manage',
+        'Only Adminstration can update principal officer accounts.',
+      )
       const existing = snapshot.users.find((user) => user.id === id)
       if (!existing) {
-        throw new Error('The selected principal officer could not be found.')
+        throw new Error('The selected user could not be found.')
+      }
+
+      const removesActiveAdmin =
+        existing.role === 'Adminstration' &&
+        existing.status === 'Active' &&
+        (draft.role !== 'Adminstration' || draft.status !== 'Active')
+      if (removesActiveAdmin && activeAdminCount(snapshot.users) <= 1) {
+        throw new Error(
+          'At least one active Adminstration account must remain.',
+        )
       }
 
       const name = draft.name.trim()
       const email = draft.email.trim()
-      if (!name) throw new Error('Enter the principal officer name.')
-      if (!email) throw new Error('Enter the principal officer email address.')
+      if (!name) throw new Error('Enter the user name.')
+      if (!email) throw new Error('Enter the user email address.')
 
-      const scheme = draft.schemeId
-        ? (snapshot.schemes.find((item) => item.id === draft.schemeId) ?? null)
-        : null
+      const schemeIds = [...new Set(draft.schemeIds)]
+      const schemes = schemeIds.map((schemeId) =>
+        snapshot.schemes.find((scheme) => scheme.id === schemeId),
+      )
+      if (schemes.some((scheme) => !scheme)) {
+        throw new Error('One or more selected schemes could not be found.')
+      }
+      const assignedSchemes = schemes.filter(
+        (scheme): scheme is Scheme => Boolean(scheme),
+      )
 
       const updated = await updateOfficerRecord(id, {
         name,
         email,
         phone: draft.phone.trim(),
+        role: draft.role,
         status: draft.status,
-        scheme,
+        schemes: assignedSchemes,
       })
-      const mapped = mapUser(updated, snapshot.schemes)
+      const mapped = mapUser(updated.record, snapshot.schemes)
 
       setSnapshot((current) => ({
         ...current,
@@ -887,20 +1192,33 @@ export function DataProvider({ children }: { children: ReactNode }) {
       }))
 
       pushActivity({
-        action: 'Principal officer updated',
+        action: 'User updated',
         subject: name,
         detail: `${name}'s account was updated${
-          scheme ? ` for ${scheme.name}` : ''
-        }.`,
+          assignedSchemes.length
+            ? ` for ${assignedSchemes.map((scheme) => scheme.name).join(', ')}`
+            : ''
+        }.${
+          updated.rolesSaved
+            ? ''
+            : ' The SharePoint PrincipalOfficersRole column did not save the workflow role.'
+        }`,
         actor,
         referenceNumber: '',
       })
+
+      return { rolesSaved: updated.rolesSaved }
     },
-    [snapshot.schemes, snapshot.users, pushActivity],
+    [authRole, snapshot.schemes, snapshot.users, pushActivity],
   )
 
   const toggleUserStatus = useCallback(
     async (id: string, actor: string) => {
+      requirePermission(
+        authRole,
+        'users:manage',
+        'Only Adminstration can enable or disable principal officer accounts.',
+      )
       const existing = snapshot.users.find((user) => user.id === id)
       if (!existing) {
         throw new Error('The selected principal officer could not be found.')
@@ -908,6 +1226,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
       const nextStatus: UserStatus =
         existing.status === 'Active' ? 'Disabled' : 'Active'
+      if (
+        existing.role === 'Adminstration' &&
+        existing.status === 'Active' &&
+        nextStatus === 'Disabled' &&
+        activeAdminCount(snapshot.users) <= 1
+      ) {
+        throw new Error(
+          'At least one active Adminstration account must remain.',
+        )
+      }
       const updated = await setOfficerStatus(id, nextStatus)
       const mapped = mapUser(updated, snapshot.schemes)
 
@@ -926,11 +1254,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
         referenceNumber: '',
       })
     },
-    [snapshot.schemes, snapshot.users, pushActivity],
+    [authRole, snapshot.schemes, snapshot.users, pushActivity],
   )
 
   const createScheme = useCallback(
     async (draft: SchemeDraft, actor: string) => {
+      requirePermission(
+        authRole,
+        'schemes:manage',
+        'Only Adminstration can create schemes.',
+      )
       const name = draft.name.trim()
       if (!name) throw new Error('Enter a scheme name.')
 
@@ -946,7 +1279,22 @@ export function DataProvider({ children }: { children: ReactNode }) {
         if (!existingOfficer) {
           throw new Error('The selected principal officer could not be found.')
         }
-        const record = await assignOfficerScheme(existingOfficer.id, mapped)
+        const officerSchemeIds = existingOfficer.schemeIds.length
+          ? existingOfficer.schemeIds
+          : existingOfficer.schemeId
+            ? [existingOfficer.schemeId]
+            : []
+        const assignedSchemes = [...new Set([...officerSchemeIds, mapped.id])]
+          .map((schemeId) =>
+            schemeId === mapped.id
+              ? mapped
+              : nextSchemes.find((scheme) => scheme.id === schemeId),
+          )
+          .filter((scheme): scheme is Scheme => Boolean(scheme))
+        const record = await assignOfficerSchemes(
+          existingOfficer.id,
+          assignedSchemes,
+        )
         officer = mapUser(record, nextSchemes)
       }
 
@@ -970,11 +1318,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
         referenceNumber: '',
       })
     },
-    [snapshot.schemes, snapshot.users, pushActivity],
+    [authRole, snapshot.schemes, snapshot.users, pushActivity],
   )
 
   const updateScheme = useCallback(
     async (id: string, draft: SchemeDraft, actor: string) => {
+      requirePermission(
+        authRole,
+        'schemes:manage',
+        'Only Adminstration can update schemes.',
+      )
       const existing = snapshot.schemes.find((scheme) => scheme.id === id)
       if (!existing) {
         throw new Error('The selected scheme could not be found.')
@@ -989,33 +1342,41 @@ export function DataProvider({ children }: { children: ReactNode }) {
         scheme.id === id ? mapped : scheme,
       )
       const officerUpdates = new Map<string, SystemUser>()
-
-      if (draft.principalOfficerId) {
-        const officer = snapshot.users.find(
-          (user) => user.id === draft.principalOfficerId,
-        )
-        if (!officer) {
-          throw new Error('The selected principal officer could not be found.')
-        }
-        const record = await assignOfficerScheme(officer.id, mapped)
-        officerUpdates.set(officer.id, mapUser(record, nextSchemes))
+      const selectedOfficer = draft.principalOfficerId
+        ? snapshot.users.find((user) => user.id === draft.principalOfficerId)
+        : undefined
+      if (draft.principalOfficerId && !selectedOfficer) {
+        throw new Error('The selected principal officer could not be found.')
       }
 
-      const nameChanged =
-        existing.title !== mapped.title ||
-        existing.schemeName !== mapped.schemeName
-
-      if (nameChanged) {
-        // Keep the schemecode/schemename values on assigned officers aligned
-        // with the renamed scheme.
-        const assigned = snapshot.users.filter(
-          (user) =>
-            user.schemeId === id && user.id !== draft.principalOfficerId,
+      const affectedOfficers = snapshot.users.filter(
+        (user) =>
+          userHasScheme(user, id) || user.id === draft.principalOfficerId,
+      )
+      for (const officer of affectedOfficers) {
+        const currentSchemeIds = officer.schemeIds.length
+          ? officer.schemeIds
+          : officer.schemeId
+            ? [officer.schemeId]
+            : []
+        const nextSchemeIds = currentSchemeIds.filter(
+          (schemeId) => schemeId !== id,
         )
-        for (const user of assigned) {
-          const record = await assignOfficerScheme(user.id, mapped)
-          officerUpdates.set(user.id, mapUser(record, nextSchemes))
+        if (officer.id === draft.principalOfficerId) {
+          nextSchemeIds.push(id)
         }
+        const assignedSchemes = [...new Set(nextSchemeIds)]
+          .map((schemeId) =>
+            schemeId === id
+              ? mapped
+              : nextSchemes.find((scheme) => scheme.id === schemeId),
+          )
+          .filter((scheme): scheme is Scheme => Boolean(scheme))
+        const record = await assignOfficerSchemes(
+          officer.id,
+          assignedSchemes,
+        )
+        officerUpdates.set(officer.id, mapUser(record, nextSchemes))
       }
 
       setSnapshot((current) => ({
@@ -1025,14 +1386,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         ),
         users: current.users.map(
           (user) =>
-            officerUpdates.get(user.id) ??
-            (user.schemeId === id
-              ? {
-                  ...user,
-                  schemeName: mapped.name,
-                  schemeCode: mapped.title || mapped.name,
-                }
-              : user),
+            officerUpdates.get(user.id) ?? user,
         ),
       }))
 
@@ -1048,11 +1402,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
         referenceNumber: '',
       })
     },
-    [snapshot.schemes, snapshot.users, pushActivity],
+    [authRole, snapshot.schemes, snapshot.users, pushActivity],
   )
 
   const toggleSchemeStatus = useCallback(
     async (id: string, actor: string) => {
+      requirePermission(
+        authRole,
+        'schemes:manage',
+        'Only Adminstration can enable or disable schemes.',
+      )
       const existing = snapshot.schemes.find((scheme) => scheme.id === id)
       if (!existing) {
         throw new Error('The selected scheme could not be found.')
@@ -1080,7 +1439,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         referenceNumber: '',
       })
     },
-    [snapshot.schemes, pushActivity],
+    [authRole, snapshot.schemes, pushActivity],
   )
 
   const getBeneficiariesForNomination = useCallback(

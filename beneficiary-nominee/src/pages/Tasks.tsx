@@ -5,8 +5,10 @@ import { useToast } from '../components/toast-context'
 import { Icon } from '../components/Icon'
 import { ErrorStatusBadge, NominationStatusBadge } from '../components/Badges'
 import { Drawer } from '../components/Drawer'
+import { Pagination } from '../components/Pagination'
 import { downloadCsv } from '../lib/export'
-import { formatDate, initials } from '../lib/format'
+import { usePagination } from '../lib/pagination'
+import { formatDate } from '../lib/format'
 import { commentLines } from '../lib/comments'
 import {
   isTaskNomination,
@@ -30,6 +32,11 @@ interface MemberDraft {
   memberNumber: string
   memberName: string
   memberDob: string
+  branchCode: string
+  costCentre: string
+  homeTelephone: string
+  cellTelephone: string
+  workTelephone: string
   email: string
 }
 
@@ -63,6 +70,11 @@ function memberDraft(nomination: Nomination): MemberDraft {
     memberNumber: nomination.memberNumber,
     memberName: nomination.memberName,
     memberDob: nomination.memberDob,
+    branchCode: nomination.branchCode,
+    costCentre: nomination.costCentre,
+    homeTelephone: nomination.homeTelephone,
+    cellTelephone: nomination.cellTelephone,
+    workTelephone: nomination.workTelephone,
     email: nomination.email,
   }
 }
@@ -93,6 +105,11 @@ export function TasksPage() {
     memberNumber: '',
     memberName: '',
     memberDob: '',
+    branchCode: '',
+    costCentre: '',
+    homeTelephone: '',
+    cellTelephone: '',
+    workTelephone: '',
     email: '',
   })
   const [schemeDraft, setSchemeDraft] = useState('')
@@ -141,6 +158,7 @@ export function TasksPage() {
       (ageFilter === '8+' && age >= 8)
     return matchesSearch && matchesError && matchesScheme && matchesAge
   })
+  const pagination = usePagination(filtered.length)
 
   const selected = tasks.find((item) => item.id === selectedId) ?? null
   const selectedBeneficiaries = selected
@@ -228,7 +246,7 @@ export function TasksPage() {
     try {
       await updateNominationDetails(
         selected.id,
-        { fundName: scheme.title || scheme.schemeName || scheme.name },
+        { fundName: scheme.name },
         profile.name,
         role,
       )
@@ -258,6 +276,11 @@ export function TasksPage() {
           memberNumber: memberDraftState.memberNumber.trim(),
           memberName: memberDraftState.memberName.trim(),
           memberDob: memberDraftState.memberDob,
+          branchCode: memberDraftState.branchCode.trim(),
+          costCentre: memberDraftState.costCentre.trim(),
+          homeTelephone: memberDraftState.homeTelephone.trim(),
+          cellTelephone: memberDraftState.cellTelephone.trim(),
+          workTelephone: memberDraftState.workTelephone.trim(),
           email: memberDraftState.email.trim(),
         },
         profile.name,
@@ -266,7 +289,7 @@ export function TasksPage() {
       notify(
         'success',
         'Member details updated',
-        'Update the Errors status from the SharePoint Errors column after review.',
+        'Member details were saved to the Nomination Members list. Update Errors after reviewing the correction.',
       )
     } catch (error) {
       notify(
@@ -432,14 +455,20 @@ export function TasksPage() {
               className="search-input"
               placeholder="Search reference, member, scheme or comment"
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                setSearch(event.target.value)
+                pagination.setPage(1)
+              }}
               aria-label="Search tasks"
             />
           </div>
           <select
             className="filter-select"
             value={schemeId}
-            onChange={(event) => setSchemeId(event.target.value)}
+            onChange={(event) => {
+              setSchemeId(event.target.value)
+              pagination.setPage(1)
+            }}
             aria-label="Filter by scheme"
           >
             <option value="All">All schemes</option>
@@ -452,9 +481,10 @@ export function TasksPage() {
           <select
             className="filter-select"
             value={errorFilter}
-            onChange={(event) =>
+            onChange={(event) => {
               setErrorFilter(event.target.value as ErrorFilter)
-            }
+              pagination.setPage(1)
+            }}
             aria-label="Filter by error status"
           >
             <option value="All">All error statuses</option>
@@ -468,9 +498,10 @@ export function TasksPage() {
           <select
             className="filter-select"
             value={ageFilter}
-            onChange={(event) =>
+            onChange={(event) => {
               setAgeFilter(event.target.value as AgeFilter)
-            }
+              pagination.setPage(1)
+            }}
             aria-label="Filter by age"
           >
             <option value="All">Any age</option>
@@ -490,7 +521,6 @@ export function TasksPage() {
                   <th>Scheme</th>
                   <th>Principal Officer</th>
                   <th>Error Status</th>
-                  <th>Latest Comment</th>
                   <th>Submitted</th>
                   <th>Updated</th>
                   <th>Age</th>
@@ -498,10 +528,12 @@ export function TasksPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((nomination) => (
+                {filtered.map((nomination, index) => (
                   <tr
                     key={nomination.id}
-                    className="is-clickable"
+                    className={`is-clickable${
+                      pagination.isVisible(index) ? '' : ' is-page-hidden'
+                    }`}
                     onClick={() => openTask(nomination)}
                   >
                     <td>
@@ -511,9 +543,6 @@ export function TasksPage() {
                     </td>
                     <td>
                       <div className="table-holder">
-                        <span className="table-avatar" aria-hidden="true">
-                          {initials(nomination.memberName)}
-                        </span>
                         <span>
                           <span className="cell-strong">
                             {nomination.memberName}
@@ -535,12 +564,6 @@ export function TasksPage() {
                     </td>
                     <td>
                       <ErrorStatusBadge status={nomination.errorStatus} />
-                    </td>
-                    <td>
-                      <span className="cell-muted">
-                        {commentLines(nomination.comments).at(-1) ??
-                          'No comments recorded'}
-                      </span>
                     </td>
                     <td>{formatDate(nomination.submissionDate)}</td>
                     <td>{formatDate(nomination.modifiedDate)}</td>
@@ -587,6 +610,7 @@ export function TasksPage() {
                   setErrorFilter('All')
                   setAgeFilter('All')
                   setSchemeId('All')
+                  pagination.setPage(1)
                 }}
               >
                 Clear filters
@@ -594,6 +618,16 @@ export function TasksPage() {
             </div>
           </div>
         )}
+
+        <Pagination
+          page={pagination.page}
+          pageCount={pagination.pageCount}
+          totalItems={filtered.length}
+          start={pagination.start}
+          end={pagination.end}
+          onPageChange={pagination.setPage}
+          itemLabel="tasks"
+        />
       </section>
 
       <Drawer
@@ -817,6 +851,38 @@ export function TasksPage() {
                   />
                 </div>
                 <div className="field">
+                  <label className="label" htmlFor="task-branch-code">
+                    Branch code
+                  </label>
+                  <input
+                    id="task-branch-code"
+                    className="input"
+                    value={memberDraftState.branchCode}
+                    onChange={(event) =>
+                      setMemberDraftState((current) => ({
+                        ...current,
+                        branchCode: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label className="label" htmlFor="task-cost-centre">
+                    Cost centre
+                  </label>
+                  <input
+                    id="task-cost-centre"
+                    className="input"
+                    value={memberDraftState.costCentre}
+                    onChange={(event) =>
+                      setMemberDraftState((current) => ({
+                        ...current,
+                        costCentre: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="field">
                   <label className="label" htmlFor="task-member-email">
                     Email address
                   </label>
@@ -833,6 +899,57 @@ export function TasksPage() {
                     }
                   />
                 </div>
+                <div className="field">
+                  <label className="label" htmlFor="task-home-telephone">
+                    Home telephone
+                  </label>
+                  <input
+                    id="task-home-telephone"
+                    type="tel"
+                    className="input"
+                    value={memberDraftState.homeTelephone}
+                    onChange={(event) =>
+                      setMemberDraftState((current) => ({
+                        ...current,
+                        homeTelephone: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label className="label" htmlFor="task-cell-telephone">
+                    Cell telephone
+                  </label>
+                  <input
+                    id="task-cell-telephone"
+                    type="tel"
+                    className="input"
+                    value={memberDraftState.cellTelephone}
+                    onChange={(event) =>
+                      setMemberDraftState((current) => ({
+                        ...current,
+                        cellTelephone: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label className="label" htmlFor="task-work-telephone">
+                    Work telephone
+                  </label>
+                  <input
+                    id="task-work-telephone"
+                    type="tel"
+                    className="input"
+                    value={memberDraftState.workTelephone}
+                    onChange={(event) =>
+                      setMemberDraftState((current) => ({
+                        ...current,
+                        workTelephone: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
               </div>
               <div className="form-actions">
                 <button
@@ -841,7 +958,7 @@ export function TasksPage() {
                   disabled={busy}
                   onClick={() => void saveMember()}
                 >
-                  Save member details
+                  Save member to SharePoint
                 </button>
               </div>
             </section>

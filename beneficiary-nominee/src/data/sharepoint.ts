@@ -15,6 +15,7 @@ import type {
   NominationNomineesWrite,
 } from '../generated/models/NominationNomineesModel'
 import type {
+  PrincipalOfficersRoleChoice,
   PrincipalOfficersRead,
   PrincipalOfficersWrite,
 } from '../generated/models/PrincipalOfficersModel'
@@ -36,14 +37,37 @@ import type {
   UserStatus,
 } from './types'
 import { appendComment } from '../lib/comments'
-import { applyRecordedErrors } from '../lib/validation'
+import {
+  applyRecordedErrors,
+  normalizeNominationErrorStatus,
+} from '../lib/validation'
+
+export type PrincipalOfficerRecord = PrincipalOfficersRead & {
+  PrincipalOfficersRole?: string | PrincipalOfficersRoleChoice
+}
+type PrincipalOfficerWriteRecord = Omit<PrincipalOfficersWrite, 'ID'> & {
+  PrincipalOfficersRole?: string | PrincipalOfficersRoleChoice
+}
 
 /* -------------------------------------------------------------------------- */
 /* Field helpers                                                              */
 /* -------------------------------------------------------------------------- */
 
-function text(value: string | undefined): string {
-  return value?.trim() ?? ''
+function text(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (value && typeof value === 'object') {
+    const fieldValue = value as Record<string, unknown>
+    for (const key of ['Value', 'value', 'Label', 'label', 'Title', 'title']) {
+      if (key in fieldValue && fieldValue[key] !== value) {
+        const normalized = text(fieldValue[key])
+        if (normalized) return normalized
+      }
+    }
+  }
+  return ''
 }
 
 function numberValue(value: number | undefined): number {
@@ -61,39 +85,124 @@ function dateOnly(value: string | undefined): string {
 }
 
 /**
- * The generated connector model predates the new list columns. These
- * intersections keep the generated code untouched until it is regenerated;
- * both fields are optional so older records still map cleanly.
+ * The connector model predates the current list columns. Keep the current
+ * SharePoint names and legacy aliases optional until the connector is refreshed.
  */
 export type NominationRecord = NominationMembersRead & {
-  Errors?: string
+  errors?: unknown
+  comments?: string
+  Errors?: unknown
   Comments?: string
+  '1stEndorserEmail'?: string
+  OData__x0031_stEndorserEmail?: string
 }
 
 type NominationWriteRecord = Partial<Omit<NominationMembersWrite, 'ID'>> & {
-  Errors?: string
+  errors?: unknown
+  comments?: string
+  Errors?: unknown
   Comments?: string
+  OData__x0031_stEndorserEmail?: string
+}
+
+type NominationLogicalField = 'errors' | 'comments' | 'endorser1Email'
+
+/**
+ * The connector schema and the live list disagree on the casing/prefix of a few
+ * optional columns. Detect the names that are actually returned and use those
+ * names for reads and writes.
+ */
+const nominationFieldCandidates: Record<NominationLogicalField, string[]> = {
+  errors: ['errors', 'Errors'],
+  comments: ['comments', 'Comments'],
+  endorser1Email: [
+    'OData__x0031_stEndorserEmail',
+    '1stEndorserEmail',
+    'OData__x0031_stEndorsementEmail',
+  ],
+}
+
+const detectedNominationFields: Record<NominationLogicalField, string> = {
+  errors: 'errors',
+  comments: 'comments',
+  endorser1Email: 'OData__x0031_stEndorserEmail',
+}
+let errorsChoiceTemplate: Record<string, unknown> | null = null
+
+function hasOwnField(record: unknown, name: string): boolean {
+  return (
+    !!record &&
+    typeof record === 'object' &&
+    Object.prototype.hasOwnProperty.call(record, name)
+  )
+}
+
+function detectNominationFields(records: NominationRecord[]): void {
+  const fields = Object.keys(
+    nominationFieldCandidates,
+  ) as NominationLogicalField[]
+  for (const field of fields) {
+    const found = nominationFieldCandidates[field].find((candidate) =>
+      records.some((record) => hasOwnField(record, candidate)),
+    )
+    if (found) detectedNominationFields[field] = found
+  }
+  const errorsField = detectedNominationFields.errors
+  const choice = records
+    .map((record) => (record as Record<string, unknown>)[errorsField])
+    .find((value) => value !== undefined && value !== null)
+  errorsChoiceTemplate =
+    choice && typeof choice === 'object' && !Array.isArray(choice)
+      ? { ...(choice as Record<string, unknown>) }
+      : null
+}
+
+function noteNominationRecord(record: NominationRecord): void {
+  detectNominationFields([record])
+}
+
+function nominationFieldValue(
+  record: NominationRecord,
+  field: NominationLogicalField,
+): string {
+  const names = [
+    detectedNominationFields[field],
+    ...nominationFieldCandidates[field],
+  ]
+  for (const name of new Set(names)) {
+    const value = (record as Record<string, unknown>)[name]
+    if (value !== undefined) return text(value)
+  }
+  return ''
+}
+
+/** Maps logical optional fields onto the live SharePoint column names. */
+function nominationFieldPatch(
+  values: Partial<Record<NominationLogicalField, string>>,
+): NominationWriteRecord {
+  const patch: NominationWriteRecord = {}
+  for (const field of Object.keys(values) as NominationLogicalField[]) {
+    const value = values[field]
+    if (value === undefined) continue
+    const writeValue =
+      field === 'errors' && errorsChoiceTemplate
+        ? { ...errorsChoiceTemplate, Value: value }
+        : value
+    ;(patch as Record<string, unknown>)[detectedNominationFields[field]] = writeValue
+  }
+  return patch
 }
 
 /* -------------------------------------------------------------------------- */
 /* Status vocabulary                                                          */
 /* -------------------------------------------------------------------------- */
 
-const canonicalStatus: Record<NominationStatus, string> = {
-  Submitted: 'Submitted',
-  Tasks: 'Tasks',
-  'Pending PO': 'Pending PO',
-  'Pending PA': 'Pending PA',
-  Approved: 'Approved',
-  Rejected: 'Rejected',
-}
-
 /**
- * Always write the canonical workflow labels. Legacy values are still read and
- * normalised, but new transitions use the validation-first vocabulary.
+ * Writes always use the canonical workflow labels. Legacy values are still read
+ * and normalised, but new transitions use the validation-first vocabulary.
  */
-export function statusWriteValue(status: NominationStatus): string {
-  return canonicalStatus[status]
+function statusWriteValue(status: NominationStatus): string {
+  return status
 }
 
 const REJECTED = /(reject|declin|denied|not\s+(approved|endorsed))/i
@@ -110,7 +219,7 @@ const PO = /(\bpo\b|principal|first|1st|stage\s*1)/i
  * Unknown and blank values land in Tasks so a record is never silently treated
  * as ready for endorsement.
  */
-export function normalizeEndorsementStatus(
+function normalizeEndorsementStatus(
   value: string | undefined,
 ): NominationStatus {
   const raw = text(value)
@@ -140,14 +249,10 @@ export function normalizeEndorsementStatus(
 
 export function normalizeUserStatus(value: string | undefined): UserStatus {
   const raw = text(value).toLowerCase()
-  if (!raw) return 'Active'
-  if (/(inactive|disabled?|suspend|blocked|false|^no$|^0$)/.test(raw)) {
-    return 'Disabled'
-  }
-  return 'Active'
+  return /^(active|enabled|yes|true|1)$/.test(raw) ? 'Active' : 'Disabled'
 }
 
-export function normalizeSchemeStatus(value: string | undefined): SchemeStatus {
+function normalizeSchemeStatus(value: string | undefined): SchemeStatus {
   const raw = text(value).toLowerCase()
   if (!raw || raw === 'active') return 'Active'
   return 'Disabled'
@@ -157,7 +262,7 @@ export function normalizeSchemeStatus(value: string | undefined): SchemeStatus {
 /* Mappers                                                                    */
 /* -------------------------------------------------------------------------- */
 
-export function findSchemeByLabel(
+function findSchemeByLabel(
   schemes: Scheme[],
   label: string,
 ): Scheme | undefined {
@@ -186,14 +291,18 @@ export function mapScheme(record: SchemesRead): Scheme {
 }
 
 export function mapUser(
-  record: PrincipalOfficersRead,
+  record: PrincipalOfficerRecord,
   schemes: Scheme[],
 ): SystemUser {
   const schemeCode = text(record.schemecode)
   const schemeName = text(record.schemename)
-  const scheme =
-    findSchemeByLabel(schemes, schemeCode) ??
-    findSchemeByLabel(schemes, schemeName)
+  const schemeCodes = schemeCode.split(';').map(text).filter(Boolean)
+  const schemeNames = schemeName.split(';').map(text).filter(Boolean)
+  const schemeIds = [...new Set(
+    [...schemeCodes, ...schemeNames]
+      .map((label) => findSchemeByLabel(schemes, label)?.id)
+      .filter((id): id is string => Boolean(id)),
+  )]
 
   return {
     id: itemId(record.ID),
@@ -204,13 +313,40 @@ export function mapUser(
       `Principal officer ${itemId(record.ID)}`,
     email: text(record.email),
     phone: text(record.contactno),
-    role: 'Principal Officer',
+    role: normalizeUserRole(record.PrincipalOfficersRole),
     status: normalizeUserStatus(record.status),
     sourceStatus: text(record.status),
-    schemeId: scheme?.id ?? null,
-    schemeCode: schemeCode || scheme?.title || '',
-    schemeName: schemeName || scheme?.name || '',
+    schemeId: schemeIds[0] ?? null,
+    schemeIds,
+    schemeCode,
+    schemeName,
     createdDate: dateOnly(record.Created),
+  }
+}
+
+export function normalizeUserRole(value: unknown): UserRole {
+  switch (text(value).toLowerCase()) {
+    case 'principal officer':
+    case 'principalofficer':
+    case 'po':
+      return 'Principal Officer'
+    case 'pension administration':
+    case 'pension adminstration':
+    case 'pension administrator':
+    case 'pension officer':
+    case 'task manager':
+    case 'taskmanager':
+    case 'pensionadmin':
+      return 'Pension Adminstration'
+    case 'administration':
+    case 'adminstration':
+    case 'admin':
+    case 'administrator':
+    case 'system administrator':
+      return 'Adminstration'
+    case 'employee':
+    default:
+      return 'Employee'
   }
 }
 
@@ -222,7 +358,7 @@ function buildApprovalHistory(
   const nominationId = itemId(record.ID)
   const firstEndorser =
     text(record.OData__x0031_stEndorseName) ||
-    text(record.OData__x0031_stEndorsementEmail)
+    nominationFieldValue(record, 'endorser1Email')
   const secondEndorser =
     text(record.OData__x0032_ndEndorseName) ||
     text(record.OData__x0032_ndEndorseEmail)
@@ -240,8 +376,22 @@ function buildApprovalHistory(
     },
   ]
 
-  if (status === 'Rejected') {
+  if (
+    status === 'Rejected' ||
+    (status === 'Pending PO' && secondEndorser && text(record.Warnings))
+  ) {
+    if (status === 'Pending PO' && firstEndorser) {
+      history.push({
+        id: `${nominationId}-endorsed`,
+        stage: 'Principal Officer review',
+        actor: firstEndorser,
+        decision: 'Endorsed',
+        date: decisionDate,
+        comments: '',
+      })
+    }
     const rejectedAtSecondStage =
+      status === 'Pending PO' ||
       Boolean(secondEndorser) ||
       /(\bpa\b|\bpm\b|pension|administrator|manager|second|2nd)/i.test(
         text(record.endorseStatus),
@@ -274,7 +424,7 @@ function buildApprovalHistory(
     })
   }
 
-  if (secondEndorser || status === 'Approved') {
+  if (status === 'Approved') {
     history.push({
       id: `${nominationId}-approved`,
       stage: 'Pension Administrator review',
@@ -294,6 +444,7 @@ export function mapNomination(
   _users: SystemUser[],
   _beneficiaries: Beneficiary[],
 ): Nomination {
+  noteNominationRecord(record)
   void _users
   void _beneficiaries
   const fundName = text(record.FundName)
@@ -316,6 +467,9 @@ export function mapNomination(
     memberDob: dateOnly(record.DateOfBirth),
     branchCode: text(record.BranchCode),
     costCentre: text(record.CostCentre),
+    homeTelephone: text(record.HomeTelephone),
+    cellTelephone: text(record.CellTelephone),
+    workTelephone: text(record.WorkTelephone),
     email: text(record.EmailAddress),
     schemeId: scheme?.id ?? '',
     schemeName: fundName || scheme?.name || '',
@@ -324,8 +478,8 @@ export function mapNomination(
     status,
     sourceStatus,
     errorStatus: null,
-    sourceErrors: text(record.Errors),
-    comments: text(record.Comments),
+    sourceErrors: nominationFieldValue(record, 'errors'),
+    comments: nominationFieldValue(record, 'comments'),
     warnings: text(record.Warnings),
     sourceFileName: text(record.SourceFileName),
     sourceFileUrl: text(record.SourceFileUrl),
@@ -336,7 +490,7 @@ export function mapNomination(
     formVersion: text(record.FormVersion),
     approvalHistory: buildApprovalHistory(record, status, submissionDate),
     endorsement1Name: text(record.OData__x0031_stEndorseName),
-    endorsement1Email: text(record.OData__x0031_stEndorsementEmail),
+    endorsement1Email: nominationFieldValue(record, 'endorser1Email'),
     endorsement2Name: text(record.OData__x0032_ndEndorseName),
     endorsement2Email: text(record.OData__x0032_ndEndorseEmail),
     createdDate: dateOnly(created),
@@ -429,6 +583,17 @@ export interface SharePointSnapshot {
   nomineeRecords: NominationNomineesRead[]
 }
 
+export async function fetchOfficerRecords(): Promise<
+  PrincipalOfficerRecord[]
+> {
+  const records = await getAllPages(
+    PrincipalOfficersService.getAll,
+    'principalOfficers',
+  )
+  noteOfficerRecords(records)
+  return records
+}
+
 export async function fetchSharePointSnapshot(): Promise<SharePointSnapshot> {
   const [schemeRecords, officerRecords, nominationRecords, nomineeRecords] =
     await Promise.all([
@@ -437,6 +602,9 @@ export async function fetchSharePointSnapshot(): Promise<SharePointSnapshot> {
       getAllPages(NominationMembersService.getAll, 'Nomination Members'),
       getAllPages(NominationNomineesService.getAll, 'Nomination Nominees'),
     ])
+
+  noteOfficerRecords(officerRecords)
+  detectNominationFields(nominationRecords)
 
   return {
     schemeRecords,
@@ -450,6 +618,15 @@ export async function fetchSharePointSnapshot(): Promise<SharePointSnapshot> {
 /* Scheme writes                                                              */
 /* -------------------------------------------------------------------------- */
 
+async function readSchemeRecord(
+  id: string | undefined,
+  fallback: SchemesRead,
+): Promise<SchemesRead> {
+  if (id === undefined || id === null || id === '') return fallback
+  const result = await SchemesService.get(String(id))
+  return result.success ? result.data : fallback
+}
+
 export async function createSchemeRecord(
   name: string,
 ): Promise<SchemesRead> {
@@ -458,9 +635,13 @@ export async function createSchemeRecord(
     schemeName: name,
     'scheme-status': 'active',
   }
-  return unwrap(
+  const created = unwrap(
     await SchemesService.create(record),
     'SharePoint could not create the scheme.',
+  )
+  return readSchemeRecord(
+    created.ID === undefined ? '' : String(created.ID),
+    created,
   )
 }
 
@@ -472,9 +653,13 @@ export async function updateSchemeRecord(
     Title: name,
     schemeName: name,
   }
-  return unwrap(
+  const updated = unwrap(
     await SchemesService.update(id, changed),
     'SharePoint could not update the scheme.',
+  )
+  return readSchemeRecord(
+    updated.ID === undefined ? id : String(updated.ID),
+    updated,
   )
 }
 
@@ -482,11 +667,15 @@ export async function setSchemeStatusRecord(
   id: string,
   status: SchemeStatus,
 ): Promise<SchemesRead> {
-  return unwrap(
+  const updated = unwrap(
     await SchemesService.update(id, {
       'scheme-status': status === 'Active' ? 'active' : 'disable',
     }),
     'SharePoint could not update the scheme status.',
+  )
+  return readSchemeRecord(
+    updated.ID === undefined ? id : String(updated.ID),
+    updated,
   )
 }
 
@@ -498,27 +687,124 @@ export interface OfficerWrite {
   name: string
   email: string
   phone: string
+  role: UserRole
   status: UserStatus
-  scheme: Scheme | null
+  schemes: Scheme[]
 }
 
-function officerFields(write: OfficerWrite): Omit<PrincipalOfficersWrite, 'ID'> {
+export interface OfficerWriteResult {
+  record: PrincipalOfficerRecord
+  /** False when the live list does not expose a writable role column. */
+  rolesSaved: boolean
+}
+
+let rolesColumnSupported: boolean | null = null
+let officerRoleChoiceTemplate: Record<string, unknown> | null = null
+
+export function officerRoleColumnSupported(): boolean | null {
+  return rolesColumnSupported
+}
+
+/** Remember whether the connected SharePoint list exposes its role field. */
+function noteOfficerRecords(records: PrincipalOfficerRecord[]): void {
+  if (records.length > 0) {
+    rolesColumnSupported = records.some((record) =>
+      hasOwnField(record, 'PrincipalOfficersRole'),
+    )
+    const choice = records
+      .map((record) => record.PrincipalOfficersRole)
+      .find(
+        (value): value is PrincipalOfficersRoleChoice =>
+          value !== undefined &&
+          value !== null &&
+          typeof value === 'object' &&
+          !Array.isArray(value),
+      )
+    officerRoleChoiceTemplate = choice
+      ? { ...choice }
+      : null
+  }
+}
+
+function officerFields(write: OfficerWrite): PrincipalOfficerWriteRecord {
+  const schemeCodes = write.schemes
+    .map((scheme) => scheme.title || scheme.name)
+    .join('; ')
+  const schemeNames = write.schemes
+    .map((scheme) => scheme.schemeName || scheme.name)
+    .join('; ')
+  if (schemeCodes.length > 255 || schemeNames.length > 255) {
+    throw new Error(
+      'The selected scheme assignments exceed the SharePoint 255-character limit.',
+    )
+  }
   return {
     Title: write.name,
     fullname: write.name,
     email: write.email,
     contactno: write.phone,
+    PrincipalOfficersRole: {
+      ...officerRoleChoiceTemplate,
+      Value: write.role,
+    },
     status: write.status,
-    schemecode: write.scheme?.title || write.scheme?.name || '',
-    schemename: write.scheme?.schemeName || write.scheme?.name || '',
+    schemecode: schemeCodes,
+    schemename: schemeNames,
+  }
+}
+
+function verifyOfficerSchemes(
+  record: PrincipalOfficerRecord,
+  schemes: Scheme[],
+): void {
+  const expected = new Set(schemes.map((scheme) => scheme.id))
+  const saved = new Set(mapUser(record, schemes).schemeIds)
+  if (
+    expected.size !== saved.size ||
+    [...expected].some((schemeId) => !saved.has(schemeId))
+  ) {
+    throw new Error(
+      'SharePoint did not save all selected scheme assignments. Check the schemecode and schemename fields and try again.',
+    )
+  }
+}
+
+async function readOfficerRecord(
+  id: string | undefined,
+  fallback: PrincipalOfficersRead,
+): Promise<PrincipalOfficerRecord> {
+  if (id === undefined || id === null) return fallback
+  const result = await PrincipalOfficersService.get(String(id))
+  return result.success ? result.data : fallback
+}
+
+async function writeOfficerRecord(
+  write: OfficerWrite,
+  operation: () => Promise<IOperationResult<PrincipalOfficersRead>>,
+  fallbackMessage: string,
+): Promise<OfficerWriteResult> {
+  const result = unwrap(await operation(), fallbackMessage)
+  const record = await readOfficerRecord(
+    result.ID === undefined ? '' : String(result.ID),
+    result,
+  )
+  verifyOfficerSchemes(record, write.schemes)
+  const rolesSaved =
+    write.role === 'Employee' ||
+    normalizeUserRole(record.PrincipalOfficersRole) === write.role
+  rolesColumnSupported = rolesSaved
+  return {
+    record,
+    rolesSaved,
   }
 }
 
 export async function createOfficerRecord(
   write: OfficerWrite,
-): Promise<PrincipalOfficersRead> {
-  return unwrap(
-    await PrincipalOfficersService.create(officerFields(write)),
+): Promise<OfficerWriteResult> {
+  return writeOfficerRecord(
+    write,
+    () => PrincipalOfficersService.create(officerFields(write)),
     'SharePoint could not create the principal officer.',
   )
 }
@@ -526,34 +812,52 @@ export async function createOfficerRecord(
 export async function updateOfficerRecord(
   id: string,
   write: OfficerWrite,
-): Promise<PrincipalOfficersRead> {
-  return unwrap(
-    await PrincipalOfficersService.update(id, officerFields(write)),
+): Promise<OfficerWriteResult> {
+  return writeOfficerRecord(
+    write,
+    () => PrincipalOfficersService.update(id, officerFields(write)),
     'SharePoint could not update the principal officer.',
   )
 }
 
-export async function assignOfficerScheme(
+export async function assignOfficerSchemes(
   id: string,
-  scheme: Scheme,
+  schemes: Scheme[],
 ): Promise<PrincipalOfficersRead> {
-  const changed: Partial<Omit<PrincipalOfficersWrite, 'ID'>> = {
-    schemecode: scheme.title || scheme.name,
-    schemename: scheme.schemeName || scheme.name,
+  const schemeCodes = schemes.map((scheme) => scheme.title || scheme.name).join('; ')
+  const schemeNames = schemes.map((scheme) => scheme.schemeName || scheme.name).join('; ')
+  if (schemeCodes.length > 255 || schemeNames.length > 255) {
+    throw new Error(
+      'The selected scheme assignments exceed the SharePoint 255-character limit.',
+    )
   }
-  return unwrap(
+  const changed: Partial<Omit<PrincipalOfficersWrite, 'ID'>> = {
+    schemecode: schemeCodes,
+    schemename: schemeNames,
+  }
+  const updated = unwrap(
     await PrincipalOfficersService.update(id, changed),
     'SharePoint could not assign the scheme to the principal officer.',
   )
+  const record = await readOfficerRecord(
+    updated.ID === undefined ? id : String(updated.ID),
+    updated,
+  )
+  verifyOfficerSchemes(record, schemes)
+  return record
 }
 
 export async function setOfficerStatus(
   id: string,
   status: UserStatus,
 ): Promise<PrincipalOfficersRead> {
-  return unwrap(
+  const updated = unwrap(
     await PrincipalOfficersService.update(id, { status }),
     'SharePoint could not update the principal officer status.',
+  )
+  return readOfficerRecord(
+    updated.ID === undefined ? id : String(updated.ID),
+    updated,
   )
 }
 
@@ -565,6 +869,7 @@ export type DecisionStage = 'PO' | 'PA'
 
 export interface NominationDecision {
   status: NominationStatus
+  rejection?: boolean
   stage: DecisionStage
   actor: string
   actorEmail: string
@@ -581,19 +886,23 @@ export async function writeNominationDecision(
 ): Promise<NominationRecord> {
   const changed: NominationWriteRecord = {
     endorseStatus: statusWriteValue(decision.status),
-    Comments: appendComment(
-      decision.previousComments,
-      decision.actor,
-      decision.actorRole,
-      decision.comment,
-    ),
+    ...nominationFieldPatch({
+      comments: appendComment(
+        decision.previousComments,
+        decision.actor,
+        decision.actorRole,
+        decision.comment,
+      ),
+      ...(decision.errors ? { errors: decision.errors } : {}),
+    }),
   }
-
-  if (decision.errors) changed.Errors = decision.errors
 
   if (decision.stage === 'PO') {
     changed.OData__x0031_stEndorseName = decision.actor
-    changed.OData__x0031_stEndorsementEmail = decision.actorEmail
+    Object.assign(
+      changed,
+      nominationFieldPatch({ endorser1Email: decision.actorEmail }),
+    )
     if (decision.secondEndorser) {
       changed.OData__x0032_ndEndorseName = decision.secondEndorser.name
       changed.OData__x0032_ndEndorseEmail = decision.secondEndorser.email
@@ -603,7 +912,7 @@ export async function writeNominationDecision(
     changed.OData__x0032_ndEndorseEmail = decision.actorEmail
   }
 
-  if (decision.status === 'Rejected') {
+  if (decision.status === 'Rejected' || decision.rejection) {
     // Keep the legacy field in sync while Comments becomes the primary record.
     changed.Warnings = decision.comment
   }
@@ -613,7 +922,15 @@ export async function writeNominationDecision(
     'SharePoint could not update the nomination.',
   )
 
-  return await getNominationRecord(id, updated)
+  const saved = await getNominationRecord(id, updated)
+  const savedStatus = normalizeEndorsementStatus(text(saved.endorseStatus))
+  if (savedStatus !== decision.status) {
+    throw new Error(
+      `SharePoint did not save the nomination status. Expected "${statusWriteValue(decision.status)}", but the list returned "${text(saved.endorseStatus) || 'blank'}".`,
+    )
+  }
+
+  return saved
 }
 
 export interface NominationValidationWrite {
@@ -628,15 +945,36 @@ export async function writeNominationValidation(
   id: string,
   payload: NominationValidationWrite,
 ): Promise<NominationRecord> {
+  const errorsUpdated = unwrap(
+    await NominationMembersService.update(
+      id,
+      nominationFieldPatch({ errors: payload.errors }),
+    ),
+    'SharePoint could not update the nomination Errors choice.',
+  )
+  const errorsRecord = await getNominationRecord(id, errorsUpdated)
+  const savedErrors = normalizeNominationErrorStatus(
+    nominationFieldValue(errorsRecord, 'errors'),
+  )
+  if (savedErrors !== payload.errors) {
+    throw new Error(
+      `SharePoint did not save the Errors choice. Expected "${payload.errors}", but the list returned "${nominationFieldValue(errorsRecord, 'errors') || 'blank'}". Check the Errors choice options and refresh the Power Apps connector.`,
+    )
+  }
+
   const changed: NominationWriteRecord = {
     endorseStatus: statusWriteValue(payload.status),
-    Errors: payload.errors,
-    Comments: payload.comments,
+    ...nominationFieldPatch({
+      comments: payload.comments,
+    }),
   }
 
   if (payload.firstEndorser) {
     changed.OData__x0031_stEndorseName = payload.firstEndorser.name
-    changed.OData__x0031_stEndorsementEmail = payload.firstEndorser.email
+    Object.assign(
+      changed,
+      nominationFieldPatch({ endorser1Email: payload.firstEndorser.email }),
+    )
   }
   if (payload.secondEndorser) {
     changed.OData__x0032_ndEndorseName = payload.secondEndorser.name
@@ -665,22 +1003,49 @@ export async function updateNominationRecord(
   if (correction.memberDob !== undefined) {
     changed.DateOfBirth = correction.memberDob
   }
+  if (correction.branchCode !== undefined) {
+    changed.BranchCode = correction.branchCode
+  }
+  if (correction.costCentre !== undefined) {
+    changed.CostCentre = correction.costCentre
+  }
+  if (correction.homeTelephone !== undefined) {
+    changed.HomeTelephone = correction.homeTelephone
+  }
+  if (correction.cellTelephone !== undefined) {
+    changed.CellTelephone = correction.cellTelephone
+  }
+  if (correction.workTelephone !== undefined) {
+    changed.WorkTelephone = correction.workTelephone
+  }
   if (correction.email !== undefined) changed.EmailAddress = correction.email
-  if (comments !== undefined) changed.Comments = comments
+  if (comments !== undefined) {
+    Object.assign(changed, nominationFieldPatch({ comments }))
+  }
 
   const updated = unwrap(
     await NominationMembersService.update(id, changed),
     'SharePoint could not update the nomination details.',
   )
 
-  return await getNominationRecord(id, updated)
+  const saved = await getNominationRecord(id, updated)
+  if (
+    correction.fundName !== undefined &&
+    text(saved.FundName).toLowerCase() !== correction.fundName.trim().toLowerCase()
+  ) {
+    throw new Error(
+      `SharePoint did not save the selected scheme to FundName. Expected "${correction.fundName}", but the list returned "${text(saved.FundName) || 'blank'}".`,
+    )
+  }
+
+  return saved
 }
 
 export async function updateNominationComments(
   id: string,
   comments: string,
 ): Promise<NominationRecord> {
-  const changed: NominationWriteRecord = { Comments: comments }
+  const changed = nominationFieldPatch({ comments })
   const updated = unwrap(
     await NominationMembersService.update(id, changed),
     'SharePoint could not update the nomination comments.',
@@ -707,36 +1072,26 @@ export async function updateNomineeRecord(
     changed.BenefitRevisedPct = correction.benefitRevisedPct
   }
 
-  return unwrap(
+  const updated = unwrap(
     await NominationNomineesService.update(id, changed),
     'SharePoint could not update the beneficiary details.',
   )
+  if (updated.ID === undefined || updated.ID === null) return updated
+  const persisted = await NominationNomineesService.get(String(updated.ID))
+  return persisted.success ? persisted.data : updated
 }
 
-export async function getNominationRecord(
+async function getNominationRecord(
   id: string,
   fallback?: NominationMembersRead,
 ): Promise<NominationRecord> {
+  const result = await NominationMembersService.get(id)
+  if (result.success) {
+    noteNominationRecord(result.data)
+    return result.data
+  }
   if (fallback && fallback.ID !== undefined) return fallback
-  return unwrap(
-    await NominationMembersService.get(id),
-    'SharePoint could not read the updated nomination.',
-  )
+  return unwrap(result, 'SharePoint could not read the updated nomination.')
 }
 
-/**
- * Updates only the revised percentage. `BenefitCurrentPct` is deliberately
- * left out of the payload so SharePoint preserves the current allocation.
- */
-export async function updateNomineeRevisedPct(
-  id: string,
-  benefitRevisedPct: number,
-): Promise<NominationNomineesRead> {
-  const changed: Partial<Omit<NominationNomineesWrite, 'ID'>> = {
-    BenefitRevisedPct: benefitRevisedPct,
-  }
-  return unwrap(
-    await NominationNomineesService.update(id, changed),
-    'SharePoint could not update the beneficiary allocation.',
-  )
-}
+

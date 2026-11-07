@@ -3,22 +3,28 @@ import { useData } from '../data/context'
 import { Icon } from '../components/Icon'
 import { UserStatusBadge } from '../components/Badges'
 import { Drawer } from '../components/Drawer'
+import { Pagination } from '../components/Pagination'
 import { useToast } from '../components/toast-context'
+import { usePagination } from '../lib/pagination'
 import { useAuth } from '../auth/auth-context'
+import { assignableRoles } from '../auth/roles'
+import { officerRoleColumnSupported } from '../data/sharepoint'
 import { formatDate, initials } from '../lib/format'
 import { userSchemeLabel } from '../lib/nominations'
-import type { SystemUser, UserDraft, UserStatus } from '../data/types'
+import type { SystemUser, UserDraft, UserRole, UserStatus } from '../data/types'
 
 type StatusFilter = 'All' | UserStatus
 
 const statuses: UserStatus[] = ['Active', 'Disabled']
+const roles: UserRole[] = assignableRoles
 
 const emptyUserForm: UserDraft = {
   name: '',
   email: '',
   phone: '',
+  role: 'Pension Adminstration',
   status: 'Active',
-  schemeId: null,
+  schemeIds: [],
 }
 
 function validateEmail(value: string): boolean {
@@ -38,6 +44,15 @@ export function UserManagementPage() {
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
 
+  const activeAdmins = users.filter(
+    (user) => user.role === 'Adminstration' && user.status === 'Active',
+  ).length
+  const roleColumnMissing = officerRoleColumnSupported() === false
+  const isLastActiveAdmin = (user: SystemUser) =>
+    user.role === 'Adminstration' &&
+    user.status === 'Active' &&
+    activeAdmins <= 1
+
   const query = search.trim().toLowerCase()
   const filtered = users.filter((user) => {
     const matchesSearch =
@@ -54,6 +69,7 @@ export function UserManagementPage() {
     const matchesStatus = status === 'All' || user.status === status
     return matchesSearch && matchesStatus
   })
+  const pagination = usePagination(filtered.length)
 
   const openCreate = () => {
     setEditingId(null)
@@ -68,8 +84,9 @@ export function UserManagementPage() {
       name: user.name,
       email: user.email,
       phone: user.phone,
+      role: user.role,
       status: user.status,
-      schemeId: user.schemeId,
+      schemeIds: user.schemeIds,
     })
     setErrors({})
     setDrawerOpen(true)
@@ -94,6 +111,15 @@ export function UserManagementPage() {
     })
   }
 
+  const toggleScheme = (schemeId: string) => {
+    setForm((current) => ({
+      ...current,
+      schemeIds: current.schemeIds.includes(schemeId)
+        ? current.schemeIds.filter((id) => id !== schemeId)
+        : [...current.schemeIds, schemeId],
+    }))
+  }
+
   const handleSave = async () => {
     const nextErrors: Record<string, string> = {}
     const name = form.name.trim()
@@ -101,7 +127,7 @@ export function UserManagementPage() {
     const phone = form.phone.trim()
 
     if (name.length < 3) {
-      nextErrors.name = 'Enter the principal officer’s full name.'
+      nextErrors.name = 'Enter the user’s full name.'
     }
     const validEmail = validateEmail(email)
     if (!validEmail) {
@@ -127,28 +153,37 @@ export function UserManagementPage() {
       name,
       email,
       phone,
+      role: form.role,
       status: form.status,
-      schemeId: form.schemeId,
+      schemeIds: [...new Set(form.schemeIds)],
     }
 
     setBusy(true)
     try {
-      if (editingId) {
-        await updateUser(editingId, draft, profile.name)
-        notify('success', 'Principal officer updated', `${name}’s account was updated.`)
-      } else {
-        await createUser(draft, profile.name)
+      const result = editingId
+        ? await updateUser(editingId, draft, profile.name)
+        : await createUser(draft, profile.name)
+
+      if (result.rolesSaved) {
         notify(
           'success',
-          'Principal officer created',
-          `${name} was added to the workspace.`,
+          editingId ? 'User updated' : 'User created',
+          editingId
+            ? `${name}’s account was updated.`
+            : `${name} was added to the workspace.`,
+        )
+      } else {
+        notify(
+          'warning',
+          editingId ? 'User saved without role' : 'User created without role',
+          'The SharePoint principalOfficers list did not save PrincipalOfficersRole. Confirm the column and refresh the Power Apps connector before assigning the role again.',
         )
       }
       closeDrawer()
     } catch (error) {
       notify(
         'error',
-        'Unable to save principal officer',
+        'Unable to save user',
         error instanceof Error ? error.message : 'Please try again.',
       )
     } finally {
@@ -193,6 +228,18 @@ export function UserManagementPage() {
         </div>
       </header>
 
+      {roleColumnMissing ? (
+        <div className="notice is-danger" role="alert">
+          <Icon name="alert-circle" size={14} className="notice-icon" />
+          <span className="data-banner-text">
+            The SharePoint <code>principalOfficers</code> list has no writable{' '}
+            <code>PrincipalOfficersRole</code> column. Name, email, phone, status and scheme are
+            saved, but workflow roles cannot be persisted until an admin exposes
+            the existing role choice column in the Power Apps connector.
+          </span>
+        </div>
+      ) : null}
+
       <section className="panel">
         <div className="panel-header">
           <div className="panel-heading">
@@ -208,14 +255,20 @@ export function UserManagementPage() {
               className="search-input"
               placeholder="Search name, email or scheme"
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                setSearch(event.target.value)
+                pagination.setPage(1)
+              }}
               aria-label="Search users"
             />
           </div>
           <select
             className="filter-select"
             value={status}
-            onChange={(event) => setStatus(event.target.value as StatusFilter)}
+            onChange={(event) => {
+              setStatus(event.target.value as StatusFilter)
+              pagination.setPage(1)
+            }}
             aria-label="Filter by status"
           >
             <option value="All">All statuses</option>
@@ -237,18 +290,21 @@ export function UserManagementPage() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Name</th>
+                        <th>Name</th>
                   <th>Email</th>
-                  <th>Scheme</th>
-                  <th>Status</th>
+                        <th>Role</th>
+                        <th>Schemes</th>
+                        <th>Status</th>
                   <th aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((user) => (
+                {filtered.map((user, index) => (
                   <tr
                     key={user.id}
-                    className="is-clickable"
+                    className={`is-clickable${
+                      pagination.isVisible(index) ? '' : ' is-page-hidden'
+                    }`}
                     onClick={() => openEdit(user)}
                   >
                     <td>
@@ -260,6 +316,7 @@ export function UserManagementPage() {
                       </div>
                     </td>
                     <td>{user.email}</td>
+                    <td>{user.role}</td>
                     <td>{userSchemeLabel(user, schemes)}</td>
                     <td>
                       <UserStatusBadge status={user.status} />
@@ -292,11 +349,13 @@ export function UserManagementPage() {
                             user.status === 'Active' ? 'Disable' : 'Enable'
                           } ${user.name}`}
                           title={
-                            user.status === 'Active'
-                              ? 'Disable user'
-                              : 'Enable user'
+                            isLastActiveAdmin(user)
+                              ? 'At least one active Admin must remain'
+                              : user.status === 'Active'
+                                ? 'Disable user'
+                                : 'Enable user'
                           }
-                          disabled={busy}
+                          disabled={busy || isLastActiveAdmin(user)}
                           onClick={(event) => {
                             event.stopPropagation()
                             void handleToggle(user)
@@ -321,8 +380,7 @@ export function UserManagementPage() {
             </span>
             <p className="empty-title">No users match your filters</p>
             <p className="empty-text">
-              Try a different search term or status, or create a new principal
-              officer account.
+              Try a different search term or status, or create a new user.
             </p>
             <div className="empty-actions">
               <button
@@ -331,6 +389,7 @@ export function UserManagementPage() {
                 onClick={() => {
                   setSearch('')
                   setStatus('All')
+                  pagination.setPage(1)
                 }}
               >
                 Clear filters
@@ -338,17 +397,27 @@ export function UserManagementPage() {
             </div>
           </div>
         )}
+
+        <Pagination
+          page={pagination.page}
+          pageCount={pagination.pageCount}
+          totalItems={filtered.length}
+          start={pagination.start}
+          end={pagination.end}
+          onPageChange={pagination.setPage}
+          itemLabel="users"
+        />
       </section>
 
       <Drawer
         open={drawerOpen}
         onClose={closeDrawer}
-        eyebrow="Principal officer account"
-        title={editingId ? 'Edit principal officer' : 'Create principal officer'}
+        eyebrow="User account"
+        title={editingId ? 'Edit user' : 'Create user'}
         subtitle={
           editingId
-            ? 'Update the scheme assignment or account status.'
-            : 'Add a principal officer to the principalOfficers list.'
+            ? 'Update the scheme assignments or account status.'
+            : 'Add a user with a workflow role to the PrincipalOfficers list.'
         }
         footer={
           <>
@@ -437,6 +506,25 @@ export function UserManagementPage() {
               />
             </div>
             <div className="field">
+              <label className="label" htmlFor="user-role">
+                Role
+              </label>
+              <select
+                id="user-role"
+                className="select"
+                value={form.role}
+                onChange={(event) =>
+                  updateField('role', event.target.value as UserRole)
+                }
+              >
+                {roles.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
               <label className="label" htmlFor="user-status">
                 Status
               </label>
@@ -458,41 +546,47 @@ export function UserManagementPage() {
           </div>
 
           <div className="field">
-            <label className="label" htmlFor="user-scheme">
-              Scheme
-            </label>
-            <select
-              id="user-scheme"
-              className="select"
-              value={form.schemeId ?? ''}
-              onChange={(event) =>
-                updateField(
-                  'schemeId',
-                  event.target.value ? event.target.value : null,
-                )
-              }
-            >
-              <option value="">Unassigned</option>
-              {schemes
-                .filter(
-                  (scheme) =>
-                    scheme.status === 'Active' || scheme.id === form.schemeId,
-                )
-                .map((scheme) => (
-                  <option
-                    key={scheme.id}
-                    value={scheme.id}
-                    disabled={scheme.status === 'Disabled'}
-                  >
-                    {scheme.name}
-                    {scheme.status === 'Disabled' ? ' (Disabled)' : ''}
-                  </option>
-                ))}
-            </select>
-            <p className="help">
-              Assigning a scheme writes its code and name to the officer’s
-              schemecode and schemename fields.
-            </p>
+            <span className="label">Scheme assignments</span>
+            {schemes.length ? (
+              <div
+                className="checkbox-grid"
+                role="group"
+                aria-label="Scheme assignments"
+              >
+                {schemes
+                  .filter(
+                    (scheme) =>
+                      scheme.status === 'Active' ||
+                      form.schemeIds.includes(scheme.id),
+                  )
+                  .map((scheme) => {
+                    const checked = form.schemeIds.includes(scheme.id)
+                    const locked =
+                      scheme.status === 'Disabled' && !checked
+                    return (
+                      <label
+                        key={scheme.id}
+                        className={`checkbox-option${locked ? ' is-disabled' : ''}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={busy || locked}
+                          onChange={() => toggleScheme(scheme.id)}
+                        />
+                        <span>
+                          {scheme.name}
+                          {scheme.status === 'Disabled'
+                            ? ' (Disabled)'
+                            : ''}
+                        </span>
+                      </label>
+                    )
+                  })}
+              </div>
+            ) : (
+              <p className="help">No schemes are available yet.</p>
+            )}
           </div>
 
           {editingId ? (

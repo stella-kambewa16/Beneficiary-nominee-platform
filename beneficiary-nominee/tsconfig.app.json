@@ -24,12 +24,5 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src"],
-  "exclude": [
-    "src/pages/Policies.tsx",
-    "src/pages/Nominees.tsx",
-    "src/pages/NewNomination.tsx",
-    "src/pages/Activity.tsx",
-    "src/lib/stats.ts"
-  ]
+  "include": ["src"]
 }
