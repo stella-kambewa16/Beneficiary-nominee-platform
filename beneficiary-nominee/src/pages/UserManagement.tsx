@@ -4,6 +4,7 @@ import { Icon } from '../components/Icon'
 import { UserStatusBadge } from '../components/Badges'
 import { Drawer } from '../components/Drawer'
 import { Pagination } from '../components/Pagination'
+import { SearchableMultiSelect } from '../components/SearchableSelect'
 import { useToast } from '../components/toast-context'
 import { usePagination } from '../lib/pagination'
 import { useAuth } from '../auth/auth-context'
@@ -71,6 +72,22 @@ export function UserManagementPage() {
   })
   const pagination = usePagination(filtered.length)
 
+  const schemeOptions = schemes
+    .filter(
+      (scheme) =>
+        scheme.status === 'Active' || form.schemeIds.includes(scheme.id),
+    )
+    .map((scheme) => {
+      const checked = form.schemeIds.includes(scheme.id)
+      return {
+        id: scheme.id,
+        label: scheme.name,
+        description:
+          scheme.status === 'Disabled' ? 'Disabled scheme' : undefined,
+        disabled: scheme.status === 'Disabled' && !checked,
+      }
+    })
+
   const openCreate = () => {
     setEditingId(null)
     setForm({ ...emptyUserForm })
@@ -109,15 +126,6 @@ export function UserManagementPage() {
       delete next[key]
       return next
     })
-  }
-
-  const toggleScheme = (schemeId: string) => {
-    setForm((current) => ({
-      ...current,
-      schemeIds: current.schemeIds.includes(schemeId)
-        ? current.schemeIds.filter((id) => id !== schemeId)
-        : [...current.schemeIds, schemeId],
-    }))
   }
 
   const handleSave = async () => {
@@ -546,44 +554,30 @@ export function UserManagementPage() {
           </div>
 
           <div className="field">
-            <span className="label">Scheme assignments</span>
+            <label className="label" htmlFor="user-schemes">
+              Scheme assignments
+            </label>
             {schemes.length ? (
-              <div
-                className="checkbox-grid"
-                role="group"
-                aria-label="Scheme assignments"
-              >
-                {schemes
-                  .filter(
-                    (scheme) =>
-                      scheme.status === 'Active' ||
-                      form.schemeIds.includes(scheme.id),
-                  )
-                  .map((scheme) => {
-                    const checked = form.schemeIds.includes(scheme.id)
-                    const locked =
-                      scheme.status === 'Disabled' && !checked
-                    return (
-                      <label
-                        key={scheme.id}
-                        className={`checkbox-option${locked ? ' is-disabled' : ''}`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          disabled={busy || locked}
-                          onChange={() => toggleScheme(scheme.id)}
-                        />
-                        <span>
-                          {scheme.name}
-                          {scheme.status === 'Disabled'
-                            ? ' (Disabled)'
-                            : ''}
-                        </span>
-                      </label>
-                    )
-                  })}
-              </div>
+              <>
+                <SearchableMultiSelect
+                  id="user-schemes"
+                  options={schemeOptions}
+                  values={form.schemeIds}
+                  onChange={(schemeIds) =>
+                    updateField('schemeIds', schemeIds)
+                  }
+                  placeholder="Search and select schemes"
+                  searchPlaceholder="Search schemes by name…"
+                  emptyMessage="No schemes match your search."
+                  disabled={busy}
+                  ariaLabel="Scheme assignments"
+                />
+                <p className="help">
+                  Search for a scheme, then tick as many as needed. Selected
+                  schemes stay visible and the list remains open until you
+                  close it.
+                </p>
+              </>
             ) : (
               <p className="help">No schemes are available yet.</p>
             )}

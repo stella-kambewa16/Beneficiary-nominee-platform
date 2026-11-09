@@ -3,6 +3,7 @@ import { useData } from '../data/context'
 import { Icon } from '../components/Icon'
 import { Drawer } from '../components/Drawer'
 import { Pagination } from '../components/Pagination'
+import { SearchableSelect } from '../components/SearchableSelect'
 import { useToast } from '../components/toast-context'
 import { usePagination } from '../lib/pagination'
 import { useAuth } from '../auth/auth-context'
@@ -66,6 +67,41 @@ export function SchemeManagementPage() {
     return matchesSearch && matchesStatus
   })
   const pagination = usePagination(filtered.length)
+
+  const officerOptions = users
+    .filter(
+      (user) =>
+        user.role === 'Principal Officer' ||
+        user.role === 'Pension Adminstration',
+    )
+    .map((user) => {
+      const assignedSchemes = schemes.filter(
+        (scheme) =>
+          userHasScheme(user, scheme.id) && scheme.id !== editingId,
+      )
+      const notes = [
+        user.role,
+        user.email,
+        user.status === 'Disabled' ? 'Disabled account' : '',
+        assignedSchemes.length
+          ? `Also assigned to ${assignedSchemes
+              .map((scheme) => scheme.name)
+              .join(', ')}`
+          : '',
+      ].filter(Boolean)
+
+      return {
+        id: user.id,
+        label: user.name,
+        description: notes.join(' · '),
+        keywords: [
+          user.name,
+          user.email,
+          user.role,
+          ...assignedSchemes.map((scheme) => scheme.name),
+        ].join(' '),
+      }
+    })
 
   const openCreate = () => {
     setEditingId(null)
@@ -403,41 +439,22 @@ export function SchemeManagementPage() {
             <label className="label" htmlFor="scheme-officer">
               Principal Officer
             </label>
-            <select
+            <SearchableSelect
               id="scheme-officer"
-              className="select"
-              value={draft.principalOfficerId ?? ''}
-              onChange={(event) =>
+              options={officerOptions}
+              value={draft.principalOfficerId}
+              onChange={(officerId) =>
                 setDraft((current) => ({
                   ...current,
-                  principalOfficerId: event.target.value || null,
+                  principalOfficerId: officerId,
                 }))
               }
-            >
-              <option value="">Unassigned</option>
-              {users
-                .filter(
-                  (user) =>
-                    user.role === 'Principal Officer' ||
-                    user.role === 'Pension Adminstration',
-                )
-                .map((user) => {
-                  const assignedSchemes = schemes.filter(
-                    (scheme) =>
-                      userHasScheme(user, scheme.id) &&
-                      scheme.id !== editingId,
-                  )
-                  return (
-                    <option key={user.id} value={user.id}>
-                      {user.name} — {user.role}
-                      {user.status === 'Disabled' ? ' (Disabled)' : ''}
-                      {assignedSchemes.length
-                        ? ` — also assigned to ${assignedSchemes.map((scheme) => scheme.name).join(', ')}`
-                        : ''}
-                    </option>
-                  )
-                })}
-            </select>
+              placeholder="Unassigned"
+              emptyLabel="Unassigned"
+              searchPlaceholder="Search Principal Officers by name or email"
+              emptyMessage="No Principal Officers match your search."
+              ariaLabel="Principal Officer"
+            />
             <p className="help">
               Assigning an officer adds this scheme while retaining their
               other scheme assignments.
